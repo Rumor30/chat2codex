@@ -1,0 +1,111 @@
+import { spawn } from 'node:child_process';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ensure, readJson, loopbackEndpoint } from './state.mjs';
+
+export const PROJECT = resolve(fileURLToPath(new URL('..', import.meta.url)));
+export const UPSTREAM = 'e85e3693fdb4e3e033348c08df0298c20fcdb612';
+export const runtimePath = () => join(PROJECT, '.runtime', UPSTREAM);
+export function profileEnvironment(state, id, env = process.env) {
+  const paths = state.paths(id); const clean = { ...env };
+  for (const k of ['CODEX_CHATGPT_WEB_HOME', 'CODEX_HOME', 'CODEX_WEB_GPT_LAUNCHER_DATA_DIR', 'CODEX_WEB_GPT_DEV_HOME', 'ELECTRON_RUN_AS_NODE', 'CHAT2CODEX_API_KEY']) delete clean[k];
+  clean.CODEX_WEB_GPT_BUN = env.CHAT2CODEX_BUN || 'bun';
+  clean.CODEX_CHATGPT_WEB_BUN = clean.CODEX_WEB_GPT_BUN;
+  clean.CODEX_WEB_GPT_DEV_HOME = paths.profile;
+  clean.CHAT2CODEX_ACCOUNT_HOME = paths.home;
+  clean.CHAT2CODEX_ACCOUNT_ID = id;
+  clean.CHAT2CODEX_WORKER_KEY_FILE = paths.token;
+  return clean;
+}
+export function checkedRuntime() {
+  const root = runtimePath();
+  const manifest = readJson(join(root, '.chat2codex-build.json'), {});
+  ensure(manifest.commit === UPSTREAM && manifest.bridgeVersion === 2, 503, 'runtime_missing', 'Run npm run bootstrap to install the pinned browser bridge');
+  return root;
+}
+export class Workers {
+  constructor(state) { this.state = state; this.children = new Map(); this.launchers = new Map(); this.cache = new Map(); this.probes = new Map(); this.starting = new Map(); }
+  async probe(id, force = false) {
+    if (this.probes.has(id)) return this.probes.get(id);
+    const cached = this.cache.get(id);
+    if (!force && cached && Date.now() - cached.checkedAt < 1500) return cached;
+    const work = this.inspect(id).finally(() => this.probes.delete(id)); this.probes.set(id, work); return work;
+  }
+  async inspect(id) {
+    const p = this.state.paths(id); let snapshot;
+    try {
+      const d = readJson(p.descriptor, {});
+      ensure(d.accountId === id && d.generation && d.endpoint, 503, 'worker_offline', 'Worker is offline');
+      const endpoint = loopbackEndpoint(d.endpoint);
+      ensure(existsSync(p.token), 503, 'worker_offline', 'Worker key is missing');
+      const token = readFileSync(p.token, 'utf8').trim();
+      const r = await fetch(`${endpoint}/health`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2500), redirect: 'error' });
+      const h = await r.json();
+      ensure(r.ok && h.accountId === id && h.generation === d.generation && Array.isArray(h.models), 503, 'worker_identity', 'Worker identity did not match');
+      snapshot = { ...h, online: true, endpoint, token, checkedAt: Date.now() };
+    } catch {
+      snapshot = { accountId: id, ready: false, models: [], state: 'offline_or_setup_required', checkedAt: Date.now() };
+    }
+    this.cache.set(id, snapshot); return snapshot;
+  }
+  async snapshots() { const pairs = await Promise.all(this.state.list().map(async a => [a.id, await this.probe(a.id)])); return new Map(pairs); }
+  async start(id) {
+    if (this.children.has(id)) return;
+    if (this.starting.has(id)) return this.starting.get(id);
+    const starting = (async () => {
+      if ((await this.probe(id, true)).online) return;
+      const root = checkedRuntime(); const p = this.state.paths(id); this.state.token(p.token);
+      const child = spawn(process.env.CHAT2CODEX_BUN || 'bun', ['run', join(root, '.chat2codex-worker.ts')], {
+        cwd: root, env: profileEnvironment(this.state, id), stdio: 'ignore', windowsHide: true, shell: false,
+      });
+      this.children.set(id, child);
+      const forget = () => { if (this.children.get(id) === child) this.children.delete(id); this.cache.delete(id); };
+      child.on('error', forget); child.on('exit', forget);
+    })().finally(() => this.starting.delete(id));
+    this.starting.set(id, starting); return starting;
+  }
+  launch(id) {
+    this.state.account(id);
+    if (this.launchers.has(id)) return;
+    const child = launchAccount(this.state, id); this.launchers.set(id, child);
+    const forget = () => { if (this.launchers.get(id) === child) this.launchers.delete(id); };
+    child.once('error', forget); child.once('exit', forget);
+  }
+  startEnabled() { for (const a of this.state.list()) if (a.enabled) this.start(a.id).catch(() => {}); }
+  async control(id, action, body) {
+    ensure(['verify', 'cancel', 'reset'].includes(action), 400, 'bad_action', 'Unsupported worker action');
+    const w = await this.probe(id, true); ensure(w.online, 503, 'worker_offline', 'Start the account worker first');
+    const r = await fetch(`${w.endpoint}/control/${action}`, { method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${w.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
+      signal: AbortSignal.timeout(action === 'verify' ? 3600000 : 15000) });
+    const result = await r.json(); this.cache.delete(id);
+    ensure(r.ok, r.status, result.error?.code || 'worker_error', result.error?.message || 'Worker control failed');
+    return result;
+  }
+  async close() {
+    for (const child of this.children.values()) child.kill('SIGTERM');
+    await Promise.all([...this.children.values()].map(child => new Promise(resolve => {
+      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 5000); timer.unref();
+      child.once('exit', () => { clearTimeout(timer); resolve(); });
+    })));
+    this.children.clear();
+  }
+}
+/** The pinned Electron launcher owns login and tunnel lifecycle in an isolated DEV profile. */
+export function launchAccount(state, id) {
+  const root = checkedRuntime();
+  ensure(readJson(join(root, '.chat2codex-build.json'), {}).launcher === true, 503, 'launcher_missing', 'Run npm run bootstrap without --core-only to install the desktop launcher');
+  return spawn(process.env.CHAT2CODEX_BUN || 'bun', ['run', '--cwd', join(root, 'launcher'), 'start', '--dev-profile'], {
+    cwd: root, env: profileEnvironment(state, id), stdio: 'inherit', shell: false,
+  });
+}
+export function setupAccount(state, id, tunnelId, keyFile) {
+  ensure(/^tunnel_[A-Za-z0-9_-]+$/.test(tunnelId || ''), 400, 'bad_tunnel', 'A real Tunnel ID is required');
+  ensure(typeof keyFile === 'string' && existsSync(resolve(keyFile)), 400, 'key_file_missing', 'A runtime key file is required; do not pass a secret on the command line');
+  const root = checkedRuntime();
+  return spawn(process.env.CHAT2CODEX_BUN || 'bun', ['run', 'src/cli.ts', 'dev', 'setup', '--full', '--tunnel-id', tunnelId,
+    '--runtime-key-file', resolve(keyFile), '--automatic-browser-interaction'], {
+    cwd: root, env: profileEnvironment(state, id), stdio: 'inherit', shell: false,
+  });
+}
