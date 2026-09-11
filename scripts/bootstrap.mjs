@@ -41,8 +41,7 @@ try {
   copyFileSync(join(PROJECT, 'bridge', 'launcher-entry.cjs'), join(root, 'launcher', '.chat2codex-launcher.cjs'));
   copyFileSync(join(PROJECT, 'bridge', 'provision.cjs'), join(root, 'launcher', '.chat2codex-provision.cjs'));
   writeJson(join(root, '.chat2codex-tsconfig.json'), { extends: './tsconfig.json', include: ['.chat2codex-worker.ts', '.chat2codex-setup.ts', 'src/**/*.ts'], exclude: ['node_modules', 'launcher'] });
-  // Existing licenses stay with the upstream checkout. We do not relabel its authorship.
   if (!readFileSync(join(root, 'LICENSE'), 'utf8').includes('MIT')) throw new Error('Unexpected upstream license');
-  writeJson(join(root, '.chat2codex-build.json'), { commit: UPSTREAM, bridgeVersion: 3, launcher: !process.argv.includes('--core-only') || existsSync(join(root, 'launcher', 'dist', 'index.html')) });
+  writeJson(join(root, '.chat2codex-build.json'), { commit: UPSTREAM, bridgeVersion: 4, launcher: !process.argv.includes('--core-only') || existsSync(join(root, 'launcher', 'dist', 'index.html')) });
   console.log('Pinned browser bridge installed. No user Codex configuration was read or changed.');
 } finally { release(); }
