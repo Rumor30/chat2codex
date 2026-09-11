@@ -50,7 +50,7 @@ const fixture = createServer(async (req, res) => {
     let item;
     if (!shellMode) {
       const plan = tools.find(t => t.name === 'update_plan' && t.type === 'function');
-      assert(plan, 'Codex did not advertise the native update_plan tool');
+      assert(plan, `Codex did not advertise update_plan; actual tool names/types: ${JSON.stringify(tools.map(t => ({ type: t.type, name: t.name, namespace: t.namespace })))}`);
       item = { type: 'function_call', id: 'fc_probe', call_id: callId, name: plan.name,
         ...(plan.namespace ? { namespace: plan.namespace } : {}),
         arguments: JSON.stringify({ plan: [{ step: `Verify transport ${marker}`, status: 'completed' }] }), status: 'completed' };
@@ -68,7 +68,7 @@ const worker = { ready: true, generation: 'fixture', endpoint: `http://127.0.0.1
 const gateway = createGateway({ state, workers: { snapshots: async () => new Map([[account.id, worker]]), control: async () => ({ cancelled: 0 }) } });
 await new Promise(r => gateway.server.listen(0, '127.0.0.1', r));
 try {
-  child = startCodex({ endpoint: `http://127.0.0.1:${gateway.server.address().port}`, token: state.token(), model: 'chatgpt-web/high', reasoning: 'high', env: { ...process.env, CODEX_HOME: codexHome }, args: ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', shellMode ? 'Use one harmless native command, then report its exact output.' : 'Update the plan with one completed transport-check step, then report completion.'] });
+  child = startCodex({ endpoint: `http://127.0.0.1:${gateway.server.address().port}`, token: state.token(), model: 'chatgpt-web/high', reasoning: 'high', env: { ...process.env, CODEX_HOME: codexHome }, args: [...(!shellMode ? ['-c', 'tools.update_plan.enabled=true'] : []), 'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', shellMode ? 'Use one harmless native command, then report its exact output.' : 'Update the plan with one completed transport-check step, then report completion.'] });
   const timer = setTimeout(() => child.kill('SIGTERM'), 90000); timer.unref();
   const code = await new Promise((r, reject) => { child.once('error', reject); child.once('exit', r); }); clearTimeout(timer);
   if (failure) throw failure;
