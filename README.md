@@ -2,7 +2,7 @@
 
 **真正的 ChatGPT Web 账号池 → 本地 Responses API → Codex 原生工具。**
 
-0.2.0 是带配置向导的 **Beta**。已实现账号管理、受保护的设置助手、逐模型验证和运行恢复；核心协议、真实 Chromium 界面、实际 Electron 空白账号启动和真实 Codex CLI 使用独立测试验证。**尚未完成已登录 ChatGPT 账号的生产端到端验收，不能把本版本称为“导入 session 后必定全自动可用”。** 验证证据和剩余发布条件见 [验证记录](docs/VALIDATION.md) 与 [发布检查表](docs/RELEASE_CHECKLIST.md)。
+0.2.1 是带真实账号验收入口的 **Beta**。已实现账号管理、受保护的设置助手、逐模型验证、运行恢复和本地 session key 导入；核心协议、真实 Chromium 界面、实际 Electron 空白账号启动和真实 Codex CLI 使用独立测试验证。**已登录 ChatGPT 账号的最终生产验收仍需要在账号持有者自己的机器上运行 `acceptance:live`。** 验证证据和剩余发布条件见 [验证记录](docs/VALIDATION.md)、[Live acceptance](docs/LIVE_ACCEPTANCE.md) 与 [发布检查表](docs/RELEASE_CHECKLIST.md)。
 
 ```text
 Codex CLI ── Responses HTTP/SSE ── Chat2Codex Gateway
@@ -52,11 +52,34 @@ node src/cli.mjs token
 
 **③ 设置助手。** 复用同一个登录 profile 打开 ChatGPT Apps 设置。程序在明确识别到控件时填写连接器名称、匹配精确 Tunnel ID、选择认证方式并扫描工具。在可确认的表单上可提交创建；不确定的控件、同名服务、安全确认或上次创建结果不明时会显示“需要操作”，保留设置窗口供手动完成。
 
-连接器名称仍需精确为 **`Codex Native2 DEV`**。只允许用户正常拥有的账号/工作区权限；助手不会绕过重新登录、2FA、管理员批准或永久写入授权。**当前真实网页选择器尚未通过登录账号验收；测试表单成功不意味着每个账号的实际设置页都匹配。** 细节见 [Session 设置机制](docs/SESSION_PROVISIONING.md)。
+连接器名称仍需精确为 **`Codex Native2 DEV`**。只允许用户正常拥有的账号/工作区权限；助手不会绕过重新登录、2FA、管理员批准或永久写入授权。**当前真实网页选择器仍需通过登录账号验收；测试表单成功不意味着每个账号的实际设置页都匹配。** 细节见 [Session 设置机制](docs/SESSION_PROVISIONING.md)。
 
 **④ 验证所选模型。** 选择账号实际显示的模型并运行 MCP 探针。它要求网页调用无副作用的 nonce 回显工具，再收到工具回执并正确回复。只有该模型通过才进入网关模型列表：验证 High 不会顺便放行 Pro。创建成功、已登录、Tunnel 已连接，都不等于模型工具回路已通过验证。
 
 配置和验证在“配置进度”中显示，可取消；重启时未完成的操作会标为中断，不偷偷重复创建连接器。
+
+## Session key 导入与真实验收
+
+0.2.1 增加本机 live acceptance。验收脚本可以把本人授权账号的 session key 导入到指定账号的独立 Electron profile，然后立即通过该 profile 的 `/api/auth/session` 验证登录态。session 不经过 Responses 网关，不写入验收报告，也不允许作为明文命令行参数传入。
+
+隐藏粘贴：
+
+```sh
+npm run bootstrap
+npm run acceptance:live -- --account ACCOUNT_ID --model chatgpt-web/high
+```
+
+或从本地私有文件读取：
+
+```sh
+# macOS/Linux
+chmod 600 /path/to/session.txt
+npm run acceptance:live -- --account ACCOUNT_ID --model chatgpt-web/high --session-file /path/to/session.txt
+```
+
+输入可为 raw session key、包含 `sessionToken` 的本地 auth-session JSON，或受支持的 NextAuth/Auth.js Cookie header。只提供 `accessToken` 会被拒绝。已经登录的独立 profile 可用 `--use-existing-session`，有意更换已有 session 时才使用 `--replace-session`。
+
+验收通过要求真实网页账号完成 MCP nonce 回路，然后真实 Codex 在隔离 workspace 中通过工具把一个随机 marker 精确写入磁盘，再由 Chat2Codex 从磁盘复核。完整说明见 [docs/LIVE_ACCEPTANCE.md](docs/LIVE_ACCEPTANCE.md)。
 
 ## 接入 Codex
 
@@ -90,9 +113,9 @@ node src/cli.mjs account list
 
 通过 `CHAT2CODEX_HOME` 设置独立存储根目录。发现真实死进程的锁时可回收；活着或无法判断的进程锁不强抢。磁盘写入失败会阻止新增模型任务，控制台保留；修复存储后再重启和验证，不盲重试原工具轮次。
 
-## 从 0.1 升级
+## 从 0.1/0.2 升级
 
-先结束/取消并释放旧任务，关闭旧网关和该项目打开的账号窗口。保留 `~/.chat2codex`，不要上传其中的 Cookie、密钥或 profile。然后更新源码并重新安装 runtime 扩展：
+先结束/取消并释放旧任务，关闭旧网关和该项目打开的账号窗口。保留 `~/.chat2codex`，不要上传其中的 Cookie、密钥或 profile。然后更新源码并重新安装 runtime 扩展；0.2.1 的 session 导入要求 bridge v4，因此 `bootstrap` 不能跳过：
 
 ```sh
 git pull --ff-only

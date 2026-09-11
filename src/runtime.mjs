@@ -24,7 +24,7 @@ export function profileEnvironment(state, id, env = process.env) {
 export function checkedRuntime() {
   const root = runtimePath();
   const manifest = readJson(join(root, '.chat2codex-build.json'), {});
-  ensure(manifest.commit === UPSTREAM && manifest.bridgeVersion === 3, 503, 'runtime_missing', 'Run npm run bootstrap to install the pinned browser bridge');
+  ensure(manifest.commit === UPSTREAM && manifest.bridgeVersion === 4, 503, 'runtime_missing', 'Run npm run bootstrap to install the pinned browser bridge');
   return root;
 }
 export class Workers {
@@ -115,12 +115,12 @@ export class Workers {
     return { code: 'tunnel_configured_connector_required' };
   }
   async launcherControl(id, action, body = {}, signal) {
-    ensure(['identity', 'open-settings', 'assist', 'quit'].includes(action), 400, 'bad_action', 'Unsupported launcher action');
+    ensure(['identity', 'import-session', 'open-settings', 'assist', 'quit'].includes(action), 400, 'bad_action', 'Unsupported launcher action');
     const paths = this.state.paths(id);
     const d = readJson(join(paths.profile, 'runtime', 'launcher-browser.json'), {});
     ensure(d.kind === 'codex-web-gpt-launcher' && d.profile === 'development' && typeof d.control?.token === 'string', 503, 'launcher_login_required', 'Open the account login window first');
     const endpoint = loopbackEndpoint(d.control.endpoint);
-    const response = await fetch(`${endpoint}/v1/chat2codex/${action}`, { method: 'POST', redirect: 'error', signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30000)]),
+    const response = await fetch(`${endpoint}/v1/chat2codex/${action}`, { method: 'POST', redirect: 'error', signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(action === 'import-session' ? 45000 : 30000)]),
       headers: { authorization: `Bearer ${d.control.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const result = await response.json();
     ensure(response.ok, response.status, /^[a-z0-9_]{1,80}$/.test(result.code || '') ? result.code : 'launcher_action_failed', 'Launcher operation did not complete');
