@@ -139,6 +139,7 @@ test('per-account launcher env cannot inherit user Codex paths', t => {
   const env = profileEnvironment(state, a.id, original);
   assert.equal(env.CODEX_HOME, undefined); assert.equal(env.CODEX_CHATGPT_WEB_HOME, undefined); assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
   assert.equal(original.CODEX_HOME, '/original'); assert.equal(env.PATH, '/safe');
+  assert.equal(env.CODEX_WEB_GPT_BUN, 'bun'); assert.equal(env.CODEX_CHATGPT_WEB_BUN, 'bun');
   assert.notEqual(env.CODEX_WEB_GPT_DEV_HOME, profileEnvironment(state, b.id, original).CODEX_WEB_GPT_DEV_HOME);
 });
 test('malformed persistent route records fail closed', t => {
@@ -151,4 +152,11 @@ test('model absence and account capacity are explicit admission failures', t => 
   state.mutate(accounts => { for (const a of accounts) a.maxThreads = 1; });
   for (const id of ['x', 'y']) { const lease = router.acquire(body(id), {}, workers, state.list()); done(router, lease, final(`r_${id}`)); }
   throwsCode(() => router.acquire(body('z'), {}, workers, state.list()), 'no_ready_account');
+});
+
+test('pending tool round cannot switch model within the same account', t => {
+  const { router, state, workers } = fixture(t);
+  for (const w of workers.values()) w.models.push({ id: 'chatgpt-web/pro' });
+  const lease = router.acquire(body('same-model'), {}, workers, state.list()); done(router, lease, final('rmodel', [call('pending')]));
+  throwsCode(() => router.acquire(body('same-model', { model: 'chatgpt-web/pro', input: [output('pending')] }), {}, workers, state.list()), 'model_conflict');
 });

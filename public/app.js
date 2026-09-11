@@ -12,7 +12,7 @@ async function refresh() {
     const card = el('article', '', 'card'); card.append(el('h3', a.label), el('span', a.ready ? 'Ready · MCP 已验证' : a.state, `badge ${a.ready ? 'ready' : ''}`), el('p', `${a.threads} / ${a.maxThreads} 个任务槽 · ${a.enabled ? '启用' : '已停用'}`));
     card.append(el('code', `node src/cli.mjs account launch ${a.id}`));
     const controls = el('div', '', 'actions');
-    controls.append(action('启动桥接', () => api(`/api/accounts/${a.id}/start`, 'POST')), action(a.enabled ? '停用' : '启用', () => api(`/api/accounts/${a.id}/${a.enabled ? 'disable' : 'enable'}`, 'POST')));
+    controls.append(action('打开登录窗口', () => api(`/api/accounts/${a.id}/launch`, 'POST')), action('启动桥接', () => api(`/api/accounts/${a.id}/start`, 'POST')), action(a.enabled ? '停用' : '启用', () => api(`/api/accounts/${a.id}/${a.enabled ? 'disable' : 'enable'}`, 'POST')));
     controls.append(action('清理空闲会话', async () => { if (confirm('清理此账号的保留网页会话？完成后需要重新运行 MCP 探针。')) await api(`/api/accounts/${a.id}/reset`, 'POST', { confirm: true }); }));
     card.append(controls);
     if (a.models.length && !a.ready) {

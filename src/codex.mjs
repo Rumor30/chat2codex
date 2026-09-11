@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { ensure } from './state.mjs';
+import { codexCommand } from './command.mjs';
 const literal = value => JSON.stringify(value);
 export function codexInvocation({ endpoint, token, model, account, reasoning, contextWindow, autoCompact, args = [], env = process.env }) {
   const u = new URL(endpoint);
@@ -24,5 +25,6 @@ export function codexInvocation({ endpoint, token, model, account, reasoning, co
 }
 export function startCodex(options) {
   const invocation = codexInvocation(options);
-  return spawn(process.env.CHAT2CODEX_CODEX || 'codex', invocation.args, { env: invocation.env, stdio: 'inherit', shell: false });
+  const command = codexCommand(process.env.CHAT2CODEX_CODEX || 'codex');
+  return spawn(command.executable, [...command.prefix, ...invocation.args], { env: invocation.env, stdio: 'inherit', shell: false });
 }

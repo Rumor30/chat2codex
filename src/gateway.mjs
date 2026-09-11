@@ -26,7 +26,7 @@ function backpressure(res, chunk) {
   });
 }
 export function createGateway({ state, workers, router = new Router(state.home), token = state.token(), timeoutMs = 3600000 }) {
-  const controllers = new Map();
+  const controllers = new Map(); const maintenance = new Set();
   const server = createServer(async (req, res) => {
     res.setHeader('x-content-type-options', 'nosniff'); res.setHeader('referrer-policy', 'no-referrer');
     res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -46,18 +46,23 @@ export function createGateway({ state, workers, router = new Router(state.home),
           models: w.get(a.id)?.models || [], threads: router.counts(a.id) })), threads: [...router.threads.values()].map(t => ({ id: t.id, accountId: t.accountId, state: t.state, pending: t.pending.length, model: t.model })) }); return;
       }
       if (path === '/api/accounts' && req.method === 'POST') { const { body } = await readBody(req, 4096); json(res, 201, state.add(body.label, body.maxThreads ?? 5)); return; }
-      const match = /^\/api\/accounts\/(acct_[a-f0-9]{32})\/(enable|disable|start|verify|reset)$/.exec(path);
+      const match = /^\/api\/accounts\/(acct_[a-f0-9]{32})\/(enable|disable|start|launch|verify|reset)$/.exec(path);
       if (match && req.method === 'POST') {
         if (match[2] === 'start') { state.account(match[1]); await workers.start(match[1]); json(res, 202, { starting: true }); }
+        else if (match[2] === 'launch') { state.account(match[1]); await workers.launch(match[1]); json(res, 202, { launching: true }); }
         else if (match[2] === 'verify') {
           const { body } = await readBody(req, 4096); ensure(typeof body.model === 'string', 400, 'model_required', 'A model is required for the MCP probe');
           json(res, 200, await workers.control(match[1], 'verify', body));
         } else if (match[2] === 'reset') {
           const { body } = await readBody(req, 4096); ensure(body.confirm === true, 400, 'confirmation_required', 'Confirm reset of retained account conversations');
+          ensure(!maintenance.has(match[1]), 409, 'account_busy', 'Account maintenance is already in progress');
           const owned = [...router.threads.values()].filter(t => t.accountId === match[1]);
           ensure(owned.every(t => !router.busy.has(t.id) && t.pending.length === 0), 409, 'account_busy', 'Cancel active tools and settle results before resetting this account');
-          const result = await workers.control(match[1], 'reset', {});
-          for (const t of owned) router.threads.delete(t.id); router.save(); json(res, 200, result);
+          maintenance.add(match[1]);
+          try {
+            const result = await workers.control(match[1], 'reset', {});
+            for (const t of owned) router.threads.delete(t.id); router.save(); json(res, 200, result);
+          } finally { maintenance.delete(match[1]); }
         }
         else json(res, 200, state.enable(match[1], match[2] === 'enable')); return;
       }
@@ -79,7 +84,8 @@ export function createGateway({ state, workers, router = new Router(state.home),
       ensure(req.method === 'POST' && ['/v1/responses', '/v1/responses/compact'].includes(path), 404, 'not_found', 'Endpoint not supported');
       const { raw, body } = await readBody(req);
       ensure(typeof body.model === 'string' && body.model.startsWith('chatgpt-web/'), 400, 'bad_model', 'This gateway supports genuine chatgpt-web/* routes only');
-      lease = router.acquire(body, req.headers, await workers.snapshots(), state.list());
+      const snapshots = new Map([...await workers.snapshots()].map(([id, worker]) => [id, maintenance.has(id) ? { ...worker, ready: false } : worker]));
+      lease = router.acquire(body, req.headers, snapshots, state.list());
       controller = new AbortController(); controllers.set(lease.thread.id, controller);
       const abort = () => { if (!res.writableEnded) controller.abort(); }; res.on('close', abort);
       const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref();

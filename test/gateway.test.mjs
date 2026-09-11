@@ -22,11 +22,11 @@ async function harness(t, behavior) {
     const endpoint = await listen(server); fixtures.push(server);
     snapshots.set(account.id, { endpoint, token: 'worker-only-token', generation: account.id, ready: true, models: [{ id: 'chatgpt-web/high', context_window: 90000, auto_compact_token_limit: 80000 }] });
   }
-  const workers = { snapshots: async () => snapshots, start() {}, control: async (_id, action) => action === 'verify' ? { verified: true } : { cancelled: 1 } };
+  const workers = { snapshots: async () => snapshots, start() {}, launch() {}, control: async (_id, action) => action === 'verify' ? { verified: true } : { cancelled: 1 } };
   const gateway = createGateway({ state, workers }); const endpoint = await listen(gateway.server); const key = state.token();
   t.after(async () => { await gateway.close(); for (const s of fixtures) { s.closeAllConnections(); await new Promise(r => s.close(r)); } rmSync(home, { recursive: true, force: true }); });
   const post = (body, headers = {}, path = '/v1/responses') => fetch(`${endpoint}${path}`, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
-  return { endpoint, key, state, accounts, requests, post, gateway, snapshots };
+  return { endpoint, key, state, accounts, requests, post, gateway, snapshots, workers };
 }
 const request = (thread, input = [{ role: 'user', content: 'inspect' }]) => ({ model: 'chatgpt-web/high', stream: true, prompt_cache_key: thread, input });
 function response(res, id, output) { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(sse({ type: 'response.created', response: { id, status: 'in_progress', output: [] } }) + sse({ type: 'response.completed', response: { id, status: 'completed', output } })); }
@@ -102,4 +102,26 @@ test('cancel also retires a pending tool boundary between HTTP requests', async 
   const r = await h.post({ thread_id: 'cancel-me' }, {}, '/api/cancel'); assert.equal(r.status, 200); await r.text();
   assert.equal(h.gateway.router.threads.get('cancel-me').state, 'cancelled'); assert.equal(h.gateway.router.threads.get('cancel-me').pending.length, 0);
   const retry = await h.post(request('cancel-me')); assert.equal(retry.status, 409); assert.equal(h.requests.length, 1);
+});
+
+test('two simultaneous HTTP tasks retain separate workers', async t => {
+  const h = await harness(t, (_req, res, body) => setTimeout(() => response(res, `parallel_${body.prompt_cache_key}`, []), 25));
+  const results = await Promise.all(['one', 'two'].map(async id => { const r = await h.post(request(id)); assert.equal(r.status, 200); return r.text(); }));
+  assert(results.every(text => text.includes('response.completed'))); assert.notEqual(h.requests[0].accountId, h.requests[1].accountId);
+});
+test('account login-window action is authenticated and account-scoped', async t => {
+  const h = await harness(t, (_req, res) => response(res, 'x', []));
+  const r = await h.post({}, {}, `/api/accounts/${h.accounts[0].id}/launch`); assert.equal(r.status, 202); assert.deepEqual(await r.json(), { launching: true });
+});
+
+test('account reset blocks admission to its existing threads until cleanup settles', async t => {
+  const h = await harness(t, (_req, res, body) => response(res, `r_${body.prompt_cache_key}`, []));
+  await (await h.post(request('bound'))).text(); const account = h.gateway.router.threads.get('bound').accountId;
+  let started; let resume;
+  const begun = new Promise(r => { started = r; }); const unblock = new Promise(r => { resume = r; });
+  h.workers.control = async () => { started(); await unblock; return { reset: true }; };
+  const reset = h.post({ confirm: true }, {}, `/api/accounts/${account}/reset`); await begun;
+  try { const blocked = await h.post(request('bound')); assert.equal(blocked.status, 503); await blocked.text(); assert.equal(h.requests.length, 1); }
+  finally { resume(); }
+  assert.equal((await reset).status, 200); assert(!h.gateway.router.threads.has('bound'));
 });

@@ -9,7 +9,7 @@
   "bin": { "chat2codex": "src/cli.mjs" },
   "scripts": {
     "start": "node src/cli.mjs serve",
-    "test": "node --test test/core.test.mjs test/gateway.test.mjs",
+    "test": "node --test test/core.test.mjs test/gateway.test.mjs test/overlay.test.mjs test/command.test.mjs",
     "check": "node scripts/check.mjs",
     "bootstrap": "node scripts/bootstrap.mjs",
     "bridge:check": "node scripts/bridge-check.mjs"

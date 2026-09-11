@@ -54,7 +54,7 @@ async function status() {
         context_window: limits.contextWindow, auto_compact_token_limit: limits.autoCompactTokenLimit,
         default_reasoning_level: route.codexEffort, supported_reasoning_levels: [{ effort: route.codexEffort, description: route.displayName }] };
     });
-    const ready = verifiedConfig === fingerprint();
+    const ready = !verifying && verifiedConfig === fingerprint();
     return { accountId, generation, ready, state: ready ? 'ready' : 'needs_mcp_probe', models };
   } catch (e) {
     const allowed = ['setup_required', 'automatic_profile_required', 'tunnel_unavailable'];
@@ -73,9 +73,8 @@ async function cancel(id: string) {
   await result.settlement; turns.delete(id); return { cancelled: result.cancelled };
 }
 /** A real harmless MCP -> Responses -> result -> ChatGPT probe, not a fabricated shell receipt. */
-async function probe(model: string) {
-  if (verifying || used) throw new Error('Probe is allowed only before this worker serves user tasks; restart it to verify again');
-  verifying = true; verifiedConfig = '';
+async function probe(model: string, signal: AbortSignal) {
+  verifiedConfig = '';
   const { config, factory } = await runtime();
   const expectedConfig = fingerprint(); let succeeded = false;
   const nonce = randomBytes(16).toString('hex'); const threadId = crypto.randomUUID(); const turnId = crypto.randomUUID();
@@ -91,7 +90,7 @@ async function probe(model: string) {
       const body = { model, stream: false, store: false, input, prompt_cache_key: threadId,
         tools: [{ type: 'function', name: 'chat2codex_probe', description: 'Echo a verification nonce. No filesystem, command, or external side effects.', parameters: { type: 'object', properties: { nonce: { type: 'string', const: nonce } }, required: ['nonce'], additionalProperties: false } }],
         client_metadata: { 'x-codex-turn-metadata': JSON.stringify({ thread_id: threadId, turn_id: turnId, request_kind: 'turn', sandbox: 'none', workspaces: { [home!]: {} } }) } };
-      const response = await responseRequest(new Request('http://127.0.0.1/v1/responses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), config, factory, { rememberState: false });
+      const response = await responseRequest(new Request('http://127.0.0.1/v1/responses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal }), config, factory, { rememberState: false });
       const r: any = await response.json();
       if (!response.ok || r.status !== 'completed' || !Array.isArray(r.output)) throw new Error('MCP probe returned an unsuccessful Responses result');
       input.push(...r.output.map((i: any) => ({ ...i, internal_chat_message_metadata_passthrough: itemMeta })));
@@ -111,7 +110,6 @@ async function probe(model: string) {
     }
     throw new Error('Probe exceeded the round limit');
   } finally {
-    verifying = false;
     const end = chatGptTurnSessions.cancelNativeTurn(threadId, turnId, new Error('Verification finished'));
     try { await end.settlement; await closeChatGptBrowserWorkers(); }
     catch (error) { succeeded = false; throw error; }
@@ -126,8 +124,12 @@ const server = Bun.serve({
     try {
       if (path === '/health' && req.method === 'GET') return Response.json(await status());
       if (path === '/control/verify' && req.method === 'POST') {
-        const body = await req.json();
-        try { return Response.json(await probe(body.model)); } finally { verifying = false; }
+        if (verifying || used) return Response.json({ error: { code: 'probe_busy', message: 'Finish or reset existing work before verifying again' } }, { status: 409 });
+        verifying = true;
+        try {
+          const body = await req.json();
+          return Response.json(await probe(body.model, req.signal));
+        } finally { verifying = false; }
       }
       if (path === '/control/reset' && req.method === 'POST') {
         if (verifying || chatGptTurnSessions.activeCount()) return Response.json({ error: { code: 'account_busy' } }, { status: 409 });
@@ -143,7 +145,7 @@ const server = Bun.serve({
       if (!identity || !id) return Response.json({ error: { code: 'native_metadata_required', message: 'This adapter requires native Codex thread/turn metadata; arbitrary Responses clients are not yet supported' } }, { status: 400 });
       turns.set(id, identity); used = true;
       const { config, factory } = await runtime();
-      return path.endsWith('/compact') ? compactRequest(req, config, factory) : responseRequest(req, config, factory);
+      return await (path.endsWith('/compact') ? compactRequest(req, config, factory) : responseRequest(req, config, factory));
     } catch {
       return Response.json({ error: { code: 'web_bridge_error', message: 'Browser/MCP bridge failed. Check the isolated launcher, tunnel, and account permissions; no fallback model was used.' } }, { status: 502 });
     }

@@ -10,6 +10,8 @@ export const runtimePath = () => join(PROJECT, '.runtime', UPSTREAM);
 export function profileEnvironment(state, id, env = process.env) {
   const paths = state.paths(id); const clean = { ...env };
   for (const k of ['CODEX_CHATGPT_WEB_HOME', 'CODEX_HOME', 'CODEX_WEB_GPT_LAUNCHER_DATA_DIR', 'CODEX_WEB_GPT_DEV_HOME', 'ELECTRON_RUN_AS_NODE', 'CHAT2CODEX_API_KEY']) delete clean[k];
+  clean.CODEX_WEB_GPT_BUN = env.CHAT2CODEX_BUN || 'bun';
+  clean.CODEX_CHATGPT_WEB_BUN = clean.CODEX_WEB_GPT_BUN;
   clean.CODEX_WEB_GPT_DEV_HOME = paths.profile;
   clean.CHAT2CODEX_ACCOUNT_HOME = paths.home;
   clean.CHAT2CODEX_ACCOUNT_ID = id;
@@ -19,11 +21,11 @@ export function profileEnvironment(state, id, env = process.env) {
 export function checkedRuntime() {
   const root = runtimePath();
   const manifest = readJson(join(root, '.chat2codex-build.json'), {});
-  ensure(manifest.commit === UPSTREAM && manifest.bridgeVersion === 1, 503, 'runtime_missing', 'Run npm run bootstrap to install the pinned browser bridge');
+  ensure(manifest.commit === UPSTREAM && manifest.bridgeVersion === 2, 503, 'runtime_missing', 'Run npm run bootstrap to install the pinned browser bridge');
   return root;
 }
 export class Workers {
-  constructor(state) { this.state = state; this.children = new Map(); this.cache = new Map(); this.probes = new Map(); this.starting = new Map(); }
+  constructor(state) { this.state = state; this.children = new Map(); this.launchers = new Map(); this.cache = new Map(); this.probes = new Map(); this.starting = new Map(); }
   async probe(id, force = false) {
     if (this.probes.has(id)) return this.probes.get(id);
     const cached = this.cache.get(id);
@@ -63,6 +65,13 @@ export class Workers {
     })().finally(() => this.starting.delete(id));
     this.starting.set(id, starting); return starting;
   }
+  launch(id) {
+    this.state.account(id);
+    if (this.launchers.has(id)) return;
+    const child = launchAccount(this.state, id); this.launchers.set(id, child);
+    const forget = () => { if (this.launchers.get(id) === child) this.launchers.delete(id); };
+    child.once('error', forget); child.once('exit', forget);
+  }
   startEnabled() { for (const a of this.state.list()) if (a.enabled) this.start(a.id).catch(() => {}); }
   async control(id, action, body) {
     ensure(['verify', 'cancel', 'reset'].includes(action), 400, 'bad_action', 'Unsupported worker action');
@@ -86,6 +95,7 @@ export class Workers {
 /** The pinned Electron launcher owns login and tunnel lifecycle in an isolated DEV profile. */
 export function launchAccount(state, id) {
   const root = checkedRuntime();
+  ensure(readJson(join(root, '.chat2codex-build.json'), {}).launcher === true, 503, 'launcher_missing', 'Run npm run bootstrap without --core-only to install the desktop launcher');
   return spawn(process.env.CHAT2CODEX_BUN || 'bun', ['run', '--cwd', join(root, 'launcher'), 'start', '--dev-profile'], {
     cwd: root, env: profileEnvironment(state, id), stdio: 'inherit', shell: false,
   });

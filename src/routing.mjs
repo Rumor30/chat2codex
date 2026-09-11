@@ -61,6 +61,7 @@ export class Router {
     ensure(worker.generation === t.generation, 409, 'worker_restarted', 'The bound worker restarted; start a new task instead of replaying old tool state');
     ensure(worker.models.some(m => m.id === body.model), 400, 'model_unavailable', 'The bound account does not expose the requested model');
     if (t.pending.length) {
+      ensure(body.model === t.model, 409, 'model_conflict', 'Settle pending tools before changing the model');
       const ids = input.filter(i => terminalToolResult(i) && t.pending.includes(i.call_id)).map(i => i.call_id);
       ensure(new Set(ids).size === ids.length && ids.length === t.pending.length && ids.every(id => t.pending.includes(id)),
         409, 'tool_result_mismatch', 'Return exactly the pending tool results, with their original call_id values');

@@ -7,3 +7,5 @@ Source: https://github.com/miuuyy/codex-chatgpt-web/tree/e85e3693fdb4e3e033348c0
 The upstream project declares the MIT license. Bootstrap retains its complete LICENSE, LICENSES and notices in the local checkout. Its dependency licenses remain their respective owners' licenses. No upstream authorship is claimed for new Chat2Codex code.
 
 The upstream DEV adapter factory is reused, but its simulated outer driver is not used to execute user tools. Electron, Bun, the MCP SDK, Playwright and the official OpenAI tunnel-client have separate upstream distributions and licenses; this repository does not redistribute their binaries.
+
+`bridge/profile-constants.ts` is a narrowly scoped replacement of the pinned upstream DEV constants. It gives each Chat2Codex account a distinct Tunnel runtime alias; bootstrap verifies the original Git blob before applying it and refuses unrelated source changes.

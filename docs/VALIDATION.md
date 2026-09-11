@@ -5,19 +5,27 @@
 日期：2026-09-11。环境：Linux，Node.js v22.16.0。
 
 - `npm run check`：通过 JavaScript 语法检查。
-- `npm test`：36 项通过，0 项失败。
+- `npm test`：48 项通过，0 项失败。
 - 真实本地 HTTP server/client 测试了 SSE 原始字节、Unicode 分块、普通/自定义工具回执、跨请求账号粘性、压缩路由、429 不重试、截断失败、管理鉴权及 CSP。
 - 工具执行 worker 在上述网络测试中是**明确的 fixture**，不是真实 ChatGPT 账号。测试不会声称已修改任何用户项目。
 - 浏览器 UI 自动化尝试受到本环境 Chromium 的 `ERR_BLOCKED_BY_ADMINISTRATOR` 限制；没有将该次尝试记录为通过。
+
+## GitHub Actions 已观察结果
+
+初始提交 `da2759d5b617f588f43a155819be10652394a864` 的 push run `34604375376`：
+Linux、Windows、macOS 核心检查通过；锁定上游的安装、TypeScript 检查和 Bun 打包通过。
+Windows 中需要 symlink 权限的测试明确跳过，不把它算成执行通过。
+后续更改以对应提交的 Checks 为准；首次成功不代表所有后续提交均通过。
 
 ## 独立验证层
 
 1. 网关/路由的本地单元和 HTTP 集成测试。
 2. `bridge:check`：安装锁定上游之后的 TypeScript + Bun 打包检查，验证实际导出/接口，不运行模型。
-3. 每账号真实 MCP nonce echo 探针：在用户的已登录独立浏览器中执行。
-4. 真正 Codex → 网页 → MCP → Codex 的项目任务和跨账号并行测试。
+3. `scripts/codex-smoke.mjs`：真实 Codex CLI + 明确的本地模型 fixture，检查原生工具回执、metadata 和 config/auth 不变；不使用真实 ChatGPT。
+4. 每账号真实 MCP nonce echo 探针：在用户的已登录独立浏览器中执行。
+5. 真正 Codex → 网页 → MCP → Codex 的项目任务和跨账号并行测试。
 
-层 1 通过不等于层 3/4 通过。管理台的 Ready 必须来自层 3，不得由手动 metadata 或测试 fixture 推导。
+层 1/2/3 通过不等于层 4/5 通过。管理台的 Ready 必须来自层 4，不得由手动 metadata 或测试 fixture 推导。
 
 ## 尚待真实账号验收
 

@@ -44,7 +44,7 @@ Codex 本地工具  ←  Responses function/custom tool call
 e85e3693fdb4e3e033348c08df0298c20fcdb612
 ```
 
-不自动跟随上游 main；代码、许可证保存在 `.runtime/<commit>/`，不复制用户现有 Codex 登录。源码升级后重新 bootstrap。
+不自动跟随上游 main；唯一受控源码 overlay 将固定 DEV Tunnel 别名改为账号专属别名，防止两个账号占用同一 Tunnel runtime。代码、许可证保存在 `.runtime/<commit>/`，不复制用户现有 Codex 登录。源码升级后重新 bootstrap。
 
 ## 首次启动
 

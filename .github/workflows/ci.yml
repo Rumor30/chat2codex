@@ -41,3 +41,16 @@ jobs:
             README.md
             LICENSE
             THIRD_PARTY_NOTICES.md
+  native-codex-fixture:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix .runtime/codex-smoke --no-save @openai/codex@0.125.0
+      - run: node scripts/codex-smoke.mjs
