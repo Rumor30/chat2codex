@@ -1,95 +1,66 @@
-# chat2codex
+# Chat2Codex
 
-把**真正的 ChatGPT 网页账号**接入一个本地 Responses 网关，再由 Codex 执行原生工具。
+**真正的 ChatGPT Web 账号池 → 本地 Responses API → Codex 原生工具。**
 
-> **0.1.0 开发预览，不是已完成真实账号验收的成品。** 网关、管理台、调度和测试可以运行；浏览器桥接代码复用锁定版本的上游。当前不声称“仅导入 session 就自动创建 MCP”，也不拿 Codex OAuth 后端代替网页模型。
-
-```text
-Codex CLI  →  localhost /v1/responses  →  账号/线程调度
-                                              ↓
-                                  独立 ChatGPT Web profile
-                                              ↓
-                            ChatGPT MCP Connector + Tunnel
-                                              ↓
-                                   上游 TurnBroker
-                                              ↓
-Codex 本地工具  ←  Responses function/custom tool call
-       ↓
-工具回执  →  同一账号、同一网页工具轮次  →  最终回答
-```
-
-## 已实现与边界
-
-| 部分 | 当前状态 |
-| --- | --- |
-| 多账号 metadata、隔离目录、启用/停用 | 已实现，有测试 |
-| HTTP/SSE Responses、function/custom tool 回执、压缩路由 | 已实现，有本地 HTTP fixture 测试 |
-| 线程粘性、完整并行工具回执、重启隔离、失败不跨号重放 | 已实现，有测试 |
-| 本地账号管理台、鉴权、Origin/Host 检查 | 已实现；不是 Electron 安装包 |
-| Codex 子进程临时 provider 配置 | 已实现；wrapper 不写用户 config.toml/auth.json |
-| 每账号 Electron 登录和 Tunnel | 调用锁定上游的独立 DEV profile；需要本机安装依赖、登录及真实验证 |
-| 真实 MCP echo 探针 | 已实现执行路径；必须在登录后的账号上实际通过，才标为 Ready |
-| Session 私有接口自动创建 Connector | **未实现，接口及权限流程尚未实证；不猜 endpoint** |
-| 两个真实账号并行、真实 Codex 文件修改、长任务压缩 | **未完成在线验收** |
-
-“DEV profile”只用于隔离浏览器、配置和 Tunnel。生产请求只调用上游 adapter/Responses handlers，**不调用 `DevChatDriver.send`，不返回模拟 shell 或补丁成功回执**。
-
-## 运行条件
-
-网关使用 Node.js 22+，无 npm 运行时依赖。Codex CLI 集成的测试目标固定为 **0.154.0**；0.125.0 缺少当前网页桥必需的元数据，不列为兼容版本。本地浏览器桥还需要 Git、**Bun 1.4.0**、桌面会话和可访问 GitHub / ChatGPT 的网络。上游依赖及 Electron 由 bootstrap 按锁文件安装。不要在无桌面服务器上把 browser worker 标为可用。
-
-代码固定复用 `miuuyy/codex-chatgpt-web` 的 commit：
+0.2.0 是带配置向导的 **Beta**。已实现账号管理、受保护的设置助手、逐模型验证和运行恢复；核心协议、真实 Chromium 界面、实际 Electron 空白账号启动和真实 Codex CLI 使用独立测试验证。**尚未完成已登录 ChatGPT 账号的生产端到端验收，不能把本版本称为“导入 session 后必定全自动可用”。** 验证证据和剩余发布条件见 [验证记录](docs/VALIDATION.md) 与 [发布检查表](docs/RELEASE_CHECKLIST.md)。
 
 ```text
-e85e3693fdb4e3e033348c08df0298c20fcdb612
+Codex CLI ── Responses HTTP/SSE ── Chat2Codex Gateway
+                                      │
+                              固定线程 → 固定账号
+                                      │
+                           独立 ChatGPT Web 浏览器
+                                      │
+                            MCP Connector / Tunnel
+                                      │
+                                 TurnBroker
+                                      │
+Codex 原生工具 ←── function_call / custom_tool_call
+       │
+       └── 工具回执 → 原账号、原网页工具轮次 → 最终回答
 ```
 
-不自动跟随上游 main；唯一受控源码 overlay 将固定 DEV Tunnel 别名改为账号专属别名，防止两个账号占用同一 Tunnel runtime。代码、许可证保存在 `.runtime/<commit>/`，不复制用户现有 Codex 登录。源码升级后重新 bootstrap。
+这里没有用 Codex OAuth 后端替换网页模型。生产路径不使用上游 DEV 模拟工具执行器。Codex 的沙箱与审批仍由 Codex 管理。
 
-## 首次启动
+## 快速启动
+
+先在本机安装 **Node.js 22+、Git、Bun 1.4.0**。需要可运行 Electron 的桌面环境以及正常访问 GitHub、ChatGPT 的网络。Codex CLI 当前明确测试的版本是 **0.154.0**；旧版 0.125.0 缺少这条网页桥需要的原生元数据。
 
 ```sh
 git clone https://github.com/Rumor30/chat2codex.git
 cd chat2codex
-npm run bootstrap
-node src/cli.mjs account add --label "账号 A"
-node src/cli.mjs account add --label "账号 B"
-node src/cli.mjs serve
+npm start
 ```
 
-管理台在 `http://127.0.0.1:7841`。另开终端运行以下命令获取**本地管理密钥**并粘贴到管理台；这不是 ChatGPT Cookie 或 OpenAI API key，不要发给别人：
+Windows 也可双击 `start.cmd`；macOS/Linux 使用 `./start.sh`。首次启动检查依赖并安装锁定的浏览器运行时，然后打开本地控制台。**这是源码启动包，不是已经内置所有依赖、签名发行的桌面安装器。** Linux 的沙箱和字体说明见 [故障处理](docs/TROUBLESHOOTING.md)。
+
+默认地址为 `http://127.0.0.1:7841`，模型 API 为 `http://127.0.0.1:7841/v1`。自动打开使用一次性、60 秒有效的本地邀请；邀请随即从地址栏移除。打开失败或邀请过期时，运行以下命令取得本地管理密钥，再手动进入控制台：
 
 ```sh
 node src/cli.mjs token
 ```
 
-为每个账号使用其返回的 ACCOUNT_ID 打开独立窗口：
+本地管理密钥不是 ChatGPT Cookie、session 或 OpenAI API key，不要将它交给其他人。
 
-```sh
-node src/cli.mjs account launch ACCOUNT_ID
-```
+## 账号首次设置
 
-在该窗口登录 ChatGPT，完成上游的 **Full harness** 设置。当前保留上游识别所需的精确 Connector 名称 **`Codex Native2 DEV`**，不要改成任意名称。各账号使用各自已授权的 Tunnel/Connector；不共享 Cookie。安全再认证、工作区管理员批准和工具写入授权由用户按正常流程完成。
+在控制台添加账号后，按卡片的四个步骤完成：
 
-已经准备好 Tunnel ID 和本机 runtime key 文件时，也可使用：
+**① 登录窗口。** 打开该账号独立的 Electron 窗口并正常登录 ChatGPT。Cookie 留在其独立 profile 内，不要求导出或上传。
 
-```sh
-node src/cli.mjs account setup ACCOUNT_ID --tunnel-id tunnel_YOUR_ID --key-file /absolute/path/runtime-key.txt
-```
+**② 配置 Tunnel。** 填入已经授权的 Tunnel ID 和 runtime key，并确认配置。密钥经本地接口及配置子进程的 stdin 传递，不放入命令行参数、操作日志或浏览器持久存储。此处配置本地 Tunnel runtime，**不自动创建 OpenAI Platform 侧的项目或 Tunnel 权限**。
 
-key 文件内容是实际的 runtime key。不要把密钥作为命令行参数，也不要提交到仓库。这个命令配置上游隔离的 DEV runtime，**不等于已在 ChatGPT 服务端创建 Connector**。仍须完成窗口里的 Connector 创建/权限步骤。
+**③ 设置助手。** 复用同一个登录 profile 打开 ChatGPT Apps 设置。程序在明确识别到控件时填写连接器名称、匹配精确 Tunnel ID、选择认证方式并扫描工具。在可确认的表单上可提交创建；不确定的控件、同名服务、安全确认或上次创建结果不明时会显示“需要操作”，保留设置窗口供手动完成。
 
-在管理台点击“启动桥接”，刷新；出现账号可用模型后选择模型并运行“真实 MCP 探针”。也可运行：
+连接器名称仍需精确为 **`Codex Native2 DEV`**。只允许用户正常拥有的账号/工作区权限；助手不会绕过重新登录、2FA、管理员批准或永久写入授权。**当前真实网页选择器尚未通过登录账号验收；测试表单成功不意味着每个账号的实际设置页都匹配。** 细节见 [Session 设置机制](docs/SESSION_PROVISIONING.md)。
 
-```sh
-node src/cli.mjs account verify ACCOUNT_ID --model chatgpt-web/high
-```
+**④ 验证所选模型。** 选择账号实际显示的模型并运行 MCP 探针。它要求网页调用无副作用的 nonce 回显工具，再收到工具回执并正确回复。只有该模型通过才进入网关模型列表：验证 High 不会顺便放行 Pro。创建成功、已登录、Tunnel 已连接，都不等于模型工具回路已通过验证。
 
-探针真的经过网页 MCP → TurnBroker → Responses，执行一个无副作用的 nonce echo，再把回执交回网页。只有网页最终返回同一个 nonce 才通过。探针不执行 shell、读写项目或使用模拟成功回执。不要在已经服务用户任务的 worker 中反复探测；清理空闲会话后再探测。
+配置和验证在“配置进度”中显示，可取消；重启时未完成的操作会标为中断，不偷偷重复创建连接器。
 
 ## 接入 Codex
 
-从该账号实际显示并通过验证的模型中选择，不保证每个账号拥有下列示例模型：
+从已经验证的模型中选择：
 
 ```sh
 node src/cli.mjs codex --model chatgpt-web/high
@@ -97,48 +68,57 @@ node src/cli.mjs codex --model chatgpt-web/pro --account ACCOUNT_ID
 node src/cli.mjs codex --model chatgpt-web/high -- exec "检查项目，不修改文件"
 ```
 
-wrapper 使用 `-c model_providers.chat2codex.*` 和子进程环境变量传递网关凭据。密钥不在 argv。不会运行 Codex 的持久配置安装/迁移程序，不修改现有 `~/.codex/config.toml`、`auth.json` 或 Codex 安装文件。**Codex 自己运行时仍可能正常写入会话历史和日志**，这里不承诺所有 Codex 目录零写入。
+`chatgpt-web/high` 和 `chatgpt-web/pro` 只是示例，账号不一定拥有这些模型。wrapper 使用进程级 `-c` provider 和 `model_catalog_json`，模型目录保存在 Chat2Codex 自己的目录，密钥仅在 Codex 子进程环境中传递。
 
-当前 wrapper 采用进程级 V1 多 agent 兼容配置；Codex 0.154.0 的本地 fixture 工具闭环已在 Windows/Linux CI 通过，但多 agent 的真实网页任务仍待实测。桌面 Codex App 的启动注入和模型选择器集成没有完成；当前入口是 CLI，不声称所有 Responses 客户端均可即插即用。
+**不修改用户现有 `~/.codex/config.toml`、`auth.json` 或 Codex 安装文件。** Codex 自己正常运行时仍可能写入自己的日志与会话历史，不能理解为整个 Codex 目录绝对零写入。Windows 直接使用原生 exe 或 npm 的 JS 入口，不通过 `cmd.exe` 拼接用户任务参数。
 
-## API 和生命周期
+当前正式接入入口是 CLI。通用 Responses 客户端、桌面 Codex App 的完整安装和模型选择器流程尚未完成独立验收。实际 adapter 要求 Codex 原生 thread/turn metadata、工具定义和工作区上下文。
 
-- `GET /v1/models`：仅汇总已启用且 Ready 的账号能力。
-- `POST /v1/responses`：流式或非流式；输入和工具定义原样转发。
-- `POST /v1/responses/compact`：转交上游原生形状的压缩处理器。
-- `GET /v1/responses` / WebSocket Upgrade：明确返回 426，使用 HTTP/SSE。
+## 日常管理与故障恢复
 
-除了静态管理页和不含账号信息的 `/health`，接口都需要 `Authorization: Bearer <local key>`。只监听 IPv4 loopback，不提供公开互联网部署、TLS、多租户授权或跨机器 worker 注册。
+同一线程及其工具回执始终固定到同一账号。账号掉线、worker 重启、模型变更或响应中断时，不自动把可能执行过工具的任务重放到另一个账号。
 
-实际网页 adapter 需要原生 Codex 的 thread/turn metadata 和可信工作区上下文。网关认识 `previous_response_id`，但不能把不完整的任意客户端历史猜成一个 Codex 任务。使用新 Codex 任务；已有工具轮次不能热迁移到另一账号。
+新账号默认一个保留任务槽，可在管理台调到 1–5 个；多账号用于授权隔离与任务分配，不是额度耗尽后绕限制的换号器。完成后点“释放此线程”，立即释放该账号槽位。释放会保存线程哈希作为重放保护，不会让已完成任务永久占用活跃路由容量。
 
-正在等待工具回执的线程不会让出账号。账号不可用、429、SSE 截断或 worker 重启时不自动换号重放，不伪造完成事件。浏览器动作已经发生但客户端状态不确定时标记 `uncertain`，需要明确取消/退役，而不是重试有副作用的工具。
-
-停用账号只阻止新线程。每账号最多五个保留线程；不通过增加并发或轮换账号规避服务限制。完成后，可清理一个账号上的全部空闲会话以释放任务槽；需要重新运行探针：
+控制台提供重命名、停用、恢复、重启桥接、归档和脱敏诊断。停用只阻止新任务；归档不会删除登录资料。取消/释放不会回滚已经发生的项目文件修改。
 
 ```sh
-node src/cli.mjs account disable ACCOUNT_ID
-node src/cli.mjs account reset ACCOUNT_ID
 node src/cli.mjs doctor
+node src/cli.mjs serve --port 7841
+node src/cli.mjs account list
 ```
 
-清理会话不会回滚 Codex 已执行的项目修改。网关重启或崩溃后的恢复采用保守隔离，不能保证无损恢复正在执行的工具。
+通过 `CHAT2CODEX_HOME` 设置独立存储根目录。发现真实死进程的锁时可回收；活着或无法判断的进程锁不强抢。磁盘写入失败会阻止新增模型任务，控制台保留；修复存储后再重启和验证，不盲重试原工具轮次。
 
-## 检查
+## 从 0.1 升级
+
+先结束/取消并释放旧任务，关闭旧网关和该项目打开的账号窗口。保留 `~/.chat2codex`，不要上传其中的 Cookie、密钥或 profile。然后更新源码并重新安装 runtime 扩展：
+
+```sh
+git pull --ff-only
+npm run bootstrap
+npm start
+```
+
+已有账号记录与浏览器目录保留；新的 launcher/worker 身份和每个模型仍需重新验证。旧 `uncertain` 任务不得直接恢复执行，按控制台取消/释放后新建 Codex 任务。
+
+## 开发与验证
 
 ```sh
 npm run check
 npm test
-npm run bridge:check   # 先完成 bootstrap；检查锁定上游的类型和导出
+npm run bootstrap
+npm run bridge:check
+npm run test:ui
 
-# 真实 Codex 协议测试：使用明确的本地模型 fixture，无 ChatGPT 登录
+# 真实 Codex，模型端为明确的本地 fixture，不调用 ChatGPT
 npm install --prefix .runtime/codex-smoke --no-save @openai/codex@0.154.0
-node scripts/codex-smoke.mjs          # 原生 update_plan 闭环
-node scripts/codex-smoke.mjs --shell  # 独立 shell 检查，需要系统允许正常创建沙箱
+node scripts/codex-smoke.mjs
+
+# 独立 shell 检查；需要本机能正常建立 Codex 沙箱
+node scripts/codex-smoke.mjs --shell
 ```
 
-代码提交 `4cc81e4` 的六项 CI 作业全部通过，包括三平台核心测试、锁定上游构建和两平台真实 Codex 计划工具闭环。默认 CLI smoke 通过不代表 shell 或 ChatGPT 网页端到端通过。CI 环境中的 shell 检查被沙箱/策略阻止，详见验证记录。
+代码固定复用 `miuuyy/codex-chatgpt-web` commit `e85e3693fdb4e3e033348c08df0298c20fcdb612`。只对其固定 DEV Tunnel 别名做原始 Git blob 校验后的受控 overlay；其余扩展是独立入口文件。公开 Codex 模型目录及许可证同样校验固定 Git blob。不会自动跟随 main，也不会以升级名义覆盖用户修改过的运行时文件。
 
-详见 [验证记录](docs/VALIDATION.md)、[安全边界](docs/SECURITY.md) 和 [Session provisioning 未完成项](docs/SESSION_PROVISIONING.md)。
-
-许可证：新增代码 MIT；上游归属与锁定来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+新增代码 MIT；上游与公开模型模板的归属见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
