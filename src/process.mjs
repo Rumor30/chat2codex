@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { Fault } from './state.mjs';
 
 const diagnostics = [
+  [/SUID sandbox|setuid_sandbox_host|chrome-sandbox.*4755/i, 'linux_sandbox_setup_required'],
   [/ENOTFOUND|EAI_AGAIN|Could not resolve|unable to resolve|ECONNREFUSED|ERR_NAME_NOT_RESOLVED/i, 'network_unavailable'],
   [/runtime key|runtime-api-key|unauthorized|invalid.*key|\b401\b/i, 'tunnel_auth_required'],
   [/developer mode|admin.*permission|not authorized|entitlement/i, 'account_permission_required'],

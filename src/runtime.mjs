@@ -46,7 +46,7 @@ export class Workers {
       const r = await fetch(`${endpoint}/health`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12000), redirect: 'error' });
       const h = await r.json();
       ensure(r.ok && h.accountId === id && h.generation === d.generation && Array.isArray(h.models), 503, 'worker_identity', 'Worker identity did not match');
-      snapshot = { ...h, online: true, endpoint, token, checkedAt: Date.now() };
+      snapshot = { ...h, ...(!h.ready && h.state === 'launcher_unavailable' && this.failures.has(id) ? { state: this.failures.get(id) } : {}), online: true, endpoint, token, checkedAt: Date.now() };
     } catch {
       snapshot = { accountId: id, ready: false, models: [], state: this.failures.get(id) || 'worker_offline', checkedAt: Date.now() };
     }
@@ -75,7 +75,10 @@ export class Workers {
   launch(id) {
     this.state.account(id);
     if (this.launchers.has(id)) return;
-    const child = launchAccount(this.state, id); this.launchers.set(id, child);
+    const child = launchAccount(this.state, id, { stdio: ['ignore', 'pipe', 'pipe'] }); this.launchers.set(id, child); this.failures.delete(id);
+    let tail = '';
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { tail = (tail + bytes.toString()).slice(-8192); });
+    child.once('close', code => { if (code !== 0) this.failures.set(id, processFailure(tail)); tail = ''; this.cache.delete(id); });
     const forget = () => { if (this.launchers.get(id) === child) this.launchers.delete(id); };
     child.once('error', () => { this.failures.set(id, 'launcher_start_failed'); forget(); }); child.once('exit', forget);
     return new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });

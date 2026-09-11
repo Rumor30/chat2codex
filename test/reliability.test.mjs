@@ -127,7 +127,7 @@ test('second terminal event cannot rewrite a completed result', t => {
 test('retiring a thread frees capacity but rejects its later replay', t => {
   const f = route(t); const lease = f.router.acquire(f.request('x'), {}, f.workers, f.state.list()); f.complete(lease, 'r'); f.router.release('x');
   assert.equal(f.router.counts(lease.thread.accountId), 0); assert.throws(() => f.router.acquire(f.request('x'), {}, f.workers, f.state.list()), code('thread_retired'));
-  const restored = new Router(f.home); assert.equal(restored.threads.get('x').state, 'retired');
+  const restored = new Router(f.home); assert(restored.retired.has('x')); assert(!restored.threads.has('x'));
 });
 test('settings page driver contains no private Connector endpoint or token extraction', () => {
   const source = settingsStep.toString(); assert(!source.includes('/backend-api/')); assert(!source.includes('document.cookie')); assert(!source.includes('localStorage'));

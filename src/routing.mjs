@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { RetiredThreads } from './retired.mjs';
 import { ensure, opaque, readJson, writeJson } from './state.mjs';
 
 function metadata(value) {
@@ -8,7 +9,7 @@ function metadata(value) {
 const terminalToolResult = item => item && ['function_call_output', 'custom_tool_call_output', 'tool_search_output'].includes(item.type);
 export class Router {
   constructor(home) {
-    this.file = join(home, 'routes.json');
+    this.file = join(home, 'routes.json'); this.retired = new RetiredThreads(home);
     const saved = readJson(this.file, { version: 1, threads: [] });
     ensure(saved.version === 1 && Array.isArray(saved.threads), 500, 'invalid_routes', 'Unsupported route store');
     ensure(saved.threads.length <= 1000 && saved.threads.every(t => t && typeof t.id === 'string' && typeof t.accountId === 'string'
@@ -16,7 +17,8 @@ export class Router {
       && Array.isArray(t.pending) && t.pending.every(id => typeof id === 'string')
       && ['ready', 'in_flight', 'waiting_tools', 'uncertain', 'failed', 'cancelled', 'retired'].includes(t.state))
       && new Set(saved.threads.map(t => t.id)).size === saved.threads.length, 500, 'invalid_routes', 'Malformed route records; state was not overwritten');
-    this.threads = new Map(saved.threads.map(t => [t.id, t])); this.busy = new Set();
+    for (const t of saved.threads) if (t.state === 'retired') this.retired.add(t.id);
+    this.threads = new Map(saved.threads.filter(t => !this.retired.has(t.id)).map(t => [t.id, t])); this.busy = new Set();
     for (const t of this.threads.values()) if (t.state === 'in_flight') t.state = 'uncertain';
   }
   save() { writeJson(this.file, { version: 1, threads: [...this.threads.values()] }); }
@@ -43,6 +45,7 @@ export class Router {
     }
     ensure(id || !body.tools?.length, 400, 'thread_required', 'Tool-enabled requests need Codex thread metadata, prompt_cache_key, or X-Chat2Codex-Thread');
     id ||= opaque('thread');
+    ensure(!this.retired.has(id), 409, 'thread_retired', 'Start a new Codex thread after retiring a conversation');
     ensure(!this.busy.has(id), 409, 'thread_busy', 'A request for this thread is already active');
     let t = this.threads.get(id); const existed = !!t;
     const pin = headers['x-chat2codex-account'];
@@ -116,6 +119,6 @@ export class Router {
   release(id) {
     const t = this.threads.get(id); ensure(t, 404, 'thread_not_found', 'Unknown thread');
     ensure(!this.busy.has(id) && t.state === 'ready' && t.pending.length === 0, 409, 'thread_not_idle', 'Only a fully completed idle thread may be released');
-    t.state = 'retired'; t.touchedAt = Date.now(); this.save();
+    this.retired.add(id); this.threads.delete(id); this.save();
   }
 }

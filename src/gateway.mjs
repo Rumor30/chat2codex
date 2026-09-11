@@ -33,7 +33,7 @@ function backpressure(res, chunk) {
 }
 export function createGateway({ state, workers, router = new Router(state.home), token = state.token(), timeoutMs = 3600000, jobs = new Jobs(state.home), diagnostics = new Diagnostics(state.home) }) {
   const invitations = new Invitations();
-  const controllers = new Map(); const maintenance = new Set();
+  const controllers = new Map(); const maintenance = new Set(); let storageHealthy = true;
   const server = createServer(async (req, res) => {
     res.setHeader('x-content-type-options', 'nosniff'); res.setHeader('referrer-policy', 'no-referrer');
     res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -98,7 +98,7 @@ export function createGateway({ state, workers, router = new Router(state.home),
           maintenance.add(match[1]);
           try {
             const result = await workers.control(match[1], 'reset', {});
-            for (const t of owned) router.threads.delete(t.id); router.save(); json(res, 200, result);
+            for (const t of owned) { t.state = 'ready'; router.release(t.id); } json(res, 200, result);
           } finally { maintenance.delete(match[1]); }
         }
         else json(res, 200, state.enable(match[1], match[2] === 'enable')); return;
@@ -118,6 +118,7 @@ export function createGateway({ state, workers, router = new Router(state.home),
         const data = [...models.values()]; json(res, 200, { object: 'list', data, models: data }); return;
       }
       if (path === '/v1/responses' && req.method === 'GET') { json(res, 426, { error: { code: 'http_sse_only', message: 'Use HTTP POST and SSE, not WebSocket' } }); return; }
+      ensure(storageHealthy, 503, 'storage_unavailable', 'Routing state could not be persisted; restore storage before starting more model work');
       ensure(req.method === 'POST' && ['/v1/responses', '/v1/responses/compact'].includes(path), 404, 'not_found', 'Endpoint not supported');
       const { raw, body } = await readBody(req);
       ensure(typeof body.model === 'string' && body.model.startsWith('chatgpt-web/'), 400, 'bad_model', 'This gateway supports genuine chatgpt-web/* routes only');
@@ -159,7 +160,12 @@ export function createGateway({ state, workers, router = new Router(state.home),
       if (!res.headersSent) json(res, fault.status, { error: { type: 'chat2codex_error', code: fault.code, message: fault.message } });
       else if (!res.destroyed) res.end(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { code: fault.code, message: fault.message } })}\n\n`);
     } finally { if (lease) {
-      controller?.abort(); router.finish(lease, success);
+      controller?.abort();
+      try { router.finish(lease, success); }
+      catch {
+        storageHealthy = false; lease.thread.state = 'uncertain'; router.busy.delete(lease.thread.id); success = false;
+        for (const active of controllers.values()) active.abort();
+      }
       if (!success && workers.control) { try { await workers.control(lease.thread.accountId, 'cancel', { thread_id: lease.thread.id }); } catch { /* Remains uncertain; never replay. */ } }
     } }
   });

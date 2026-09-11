@@ -166,3 +166,11 @@ test('admin snapshots omit large model instructions while API catalog preserves 
   assert(!(await (await fetch(`${h.endpoint}/api/accounts`, { headers })).text()).includes('PUBLIC_NATIVE_TEMPLATE'));
   assert((await (await fetch(`${h.endpoint}/v1/models`, { headers })).text()).includes('PUBLIC_NATIVE_TEMPLATE'));
 });
+
+test('storage failure during request settlement does not crash the HTTP server', async t => {
+  const h = await harness(t, (_req, res, body) => response(res, `r_${body.prompt_cache_key}`, []));
+  h.gateway.router.finish = () => { throw new Error('disk full'); };
+  await (await h.post(request('settlement'))).text();
+  const second = await h.post(request('next')); assert.equal(second.status, 503); assert.equal((await second.json()).error.code, 'storage_unavailable');
+  assert.equal((await fetch(`${h.endpoint}/health`)).status, 200); assert.equal(h.requests.length, 1);
+});

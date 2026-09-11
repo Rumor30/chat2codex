@@ -4,6 +4,7 @@ const labels = {
   ready: '已验证，可接入', needs_mcp_probe: '等待 MCP 模型验证', probe_running: '正在验证 MCP', worker_offline: '桥接尚未启动',
   setup_required: '尚未配置 Tunnel', tunnel_unavailable: 'Tunnel 未连接', launcher_unavailable: '请打开账号登录窗口',
   launcher_login_required: '请先登录账号', launcher_upgrade_required: '请重启升级后的登录窗口', launcher_identity_mismatch: '账号身份不匹配',
+  linux_sandbox_setup_required: 'Linux 的 Electron 沙箱需要管理员按安装说明配置；请勿关闭沙箱',
   runtime_restart_required: '配置已更改，请重启桥接', dependency_missing: '缺少运行依赖，请检查运行环境', network_unavailable: '网络连接不可用',
   model_verified: '所选模型已通过真实 MCP 验证', model_not_verified: '所选模型还未验证', completed: '配置完成',
   tunnel_configured_connector_required: 'Tunnel 已配置；下一步运行设置助手并验证模型',

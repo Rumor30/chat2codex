@@ -70,6 +70,12 @@ jobs:
       - run: node scripts/bootstrap.mjs
       - run: npm run bridge:check
       - run: npm run test:ui
+      - name: Install Electron sandbox helper permissions in disposable CI
+        run: |
+          helper=".runtime/e85e3693fdb4e3e033348c08df0298c20fcdb612/launcher/node_modules/electron/dist/chrome-sandbox"
+          test -f "$helper" && test ! -L "$helper"
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
       - run: xvfb-run --auto-servernum node scripts/launcher-smoke.mjs
       - uses: actions/upload-artifact@v4
         if: always()
