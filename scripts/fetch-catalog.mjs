@@ -13,7 +13,19 @@ export async function fetchCatalog(destination) {
   }
   const hash = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
   if (hash !== CATALOG_BLOB) throw new Error('Public Codex catalog does not match its pinned Git blob');
-  mkdirSync(dirname(destination), { recursive: true }); writeFileSync(destination, bytes);
+  mkdirSync(dirname(destination), { recursive: true });
+  const licensePath = `${destination}.LICENSE`;
+  let license;
+  if (existsSync(licensePath)) license = readFileSync(licensePath);
+  else {
+    const response = await fetch('https://raw.githubusercontent.com/openai/codex/rust-v0.154.0/LICENSE', { signal: AbortSignal.timeout(30000), redirect: 'error' });
+    if (!response.ok) throw new Error('Could not retain the public Codex catalog license');
+    license = Buffer.from(await response.arrayBuffer());
+  }
+  const licenseHash = createHash('sha1').update(`blob ${license.length}\0`).update(license).digest('hex');
+  if (licenseHash !== '4606e72e042564097e8780d66c1d4dcb611869bd') throw new Error('Public Codex license does not match its pinned Git blob');
+  writeFileSync(licensePath, license);
+  writeFileSync(destination, bytes);
   return JSON.parse(bytes.toString('utf8'));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

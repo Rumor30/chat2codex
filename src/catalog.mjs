@@ -4,7 +4,7 @@ import { ensure, privateDir, writeJson } from './state.mjs';
 export function catalogFile(home, models) {
   ensure(isAbsolute(home) && Array.isArray(models) && models.length > 0, 400, 'invalid_catalog', 'A nonempty verified catalog is required');
   const entries = models.map(model => {
-    ensure(model && typeof model.slug === 'string' && model.slug.startsWith('chatgpt-web/') && typeof model.base_instructions === 'string'
+    ensure(model && typeof model.slug === 'string' && model.slug.startsWith('chatgpt-web/') && (typeof model.base_instructions === 'string' || typeof model.model_messages?.instructions_template === 'string')
       && Number.isSafeInteger(model.context_window) && model.context_window > 0, 502, 'invalid_catalog', 'A model is missing native catalog metadata');
     return { ...model, prefer_websockets: false, use_responses_lite: false, tool_mode: null, supports_experimental_context: false };
   });

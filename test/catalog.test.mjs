@@ -32,3 +32,10 @@ test('cached public templates with wrong Git hash are rejected without replaceme
   const dest = join(home(t), 'public.json'); writeFileSync(dest, '{"models":[]}');
   await assert.rejects(fetchCatalog(dest), /pinned Git blob/); assert.equal(readFileSync(dest, 'utf8'), '{"models":[]}');
 });
+
+test('modern native instruction templates are accepted without fabricating legacy base instructions', t => {
+  const root = home(t); const model = { ...entry, base_instructions: undefined, model_messages: { instructions_template: 'public fixture template', instructions_variables: {} } };
+  const file = catalogFile(root, [model]); const result = JSON.parse(readFileSync(file));
+  assert.equal(result.models[0].model_messages.instructions_template, 'public fixture template');
+  assert(!Object.hasOwn(result.models[0], 'base_instructions'));
+});

@@ -144,13 +144,13 @@ export class Workers {
   }
 }
 /** The pinned Electron launcher owns login and tunnel lifecycle in an isolated DEV profile. */
-export function launchAccount(state, id) {
+export function launchAccount(state, id, { stdio = 'ignore' } = {}) {
   const root = checkedRuntime();
   ensure(readJson(join(root, '.chat2codex-build.json'), {}).launcher === true, 503, 'launcher_missing', 'Run npm run bootstrap without --core-only to install the desktop launcher');
   const require = createRequire(join(root, 'launcher', 'package.json'));
   const electron = require('electron');
   return spawn(electron, [join(root, 'launcher', '.chat2codex-launcher.cjs'), '--dev-profile'], {
-    cwd: root, env: profileEnvironment(state, id), stdio: 'ignore', shell: false,
+    cwd: root, env: profileEnvironment(state, id), stdio, shell: false,
   });
 }
 export function setupAccount(state, id, tunnelId, keyFile) {
