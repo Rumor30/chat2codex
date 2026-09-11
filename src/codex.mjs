@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { ensure } from './state.mjs';
 import { codexCommand } from './command.mjs';
 const literal = value => JSON.stringify(value);
-export function codexInvocation({ endpoint, token, model, account, reasoning, contextWindow, autoCompact, args = [], env = process.env }) {
+export function codexInvocation({ endpoint, token, model, account, reasoning, contextWindow, autoCompact, catalogPath, args = [], env = process.env }) {
   const u = new URL(endpoint);
   ensure(u.protocol === 'http:' && u.hostname === '127.0.0.1' && !u.username && !u.password && !u.search && !u.hash && (u.pathname === '/' || u.pathname === '/v1'), 400, 'bad_endpoint', 'Codex connects only to the local pool');
   ensure(typeof model === 'string' && model.startsWith('chatgpt-web/'), 400, 'bad_model', 'Select a verified chatgpt-web/* model');
@@ -17,6 +17,7 @@ export function codexInvocation({ endpoint, token, model, account, reasoning, co
     'model_providers.chat2codex.supports_websockets=false',
     'features.multi_agent_v2=false', 'features.multi_agent=true', 'agents.max_depth=2',
   ];
+  if (catalogPath) settings.push(`model_catalog_json=${literal(catalogPath)}`);
   if (reasoning) settings.push(`model_reasoning_effort=${literal(reasoning)}`);
   if (Number.isSafeInteger(contextWindow) && contextWindow > 0) settings.push(`model_context_window=${contextWindow}`);
   if (Number.isSafeInteger(autoCompact) && autoCompact > 0) settings.push(`model_auto_compact_token_limit=${autoCompact}`);

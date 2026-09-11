@@ -55,3 +55,24 @@ jobs:
           node-version: '22'
       - run: npm install --prefix .runtime/codex-smoke --no-save @openai/codex@0.154.0
       - run: node scripts/codex-smoke.mjs
+
+  desktop-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - run: node scripts/bootstrap.mjs
+      - run: npm run bridge:check
+      - run: npm run test:ui
+      - run: xvfb-run --auto-servernum node scripts/launcher-smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-fixture-screenshots
+          path: .runtime/ui-artifacts/

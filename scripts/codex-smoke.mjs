@@ -9,6 +9,8 @@ import { successfulShellReceipt } from './smoke-receipt.mjs';
 import { State } from '../src/state.mjs';
 import { createGateway } from '../src/gateway.mjs';
 import { startCodex } from '../src/codex.mjs';
+import { catalogFile } from '../src/catalog.mjs';
+import { fetchCatalog } from './fetch-catalog.mjs';
 const entry = resolve('.runtime/codex-smoke/node_modules/@openai/codex/bin/codex.js');
 assert(existsSync(entry), 'Install the pinned @openai/codex package into .runtime/codex-smoke first');
 process.env.CHAT2CODEX_CODEX = entry;
@@ -63,12 +65,14 @@ const fixture = createServer(async (req, res) => {
   } catch (e) { failure = e; res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":{"message":"local smoke fixture failed"}}'); }
 });
 await new Promise(r => fixture.listen(0, '127.0.0.1', r));
+const template = (await fetchCatalog(resolve('.runtime/codex-catalog.json'))).models[0];
+const catalogPath = catalogFile(home, [{ ...template, slug: 'chatgpt-web/high', id: 'chatgpt-web/high', display_name: 'Local transport fixture', default_reasoning_level: 'high', supported_reasoning_levels: [{ effort: 'high', description: 'High' }], context_window: 90000, max_context_window: 90000, visibility: 'list', supported_in_api: true, multi_agent_version: 'v1', auto_compact_token_limit: 80000 }]);
 const state = new State(join(home, 'pool')); const account = state.add('Explicit local fixture');
 const worker = { ready: true, generation: 'fixture', endpoint: `http://127.0.0.1:${fixture.address().port}`, token: 'fixture-worker-key', models: [{ id: 'chatgpt-web/high' }] };
 const gateway = createGateway({ state, workers: { snapshots: async () => new Map([[account.id, worker]]), control: async () => ({ cancelled: 0 }) } });
 await new Promise(r => gateway.server.listen(0, '127.0.0.1', r));
 try {
-  child = startCodex({ endpoint: `http://127.0.0.1:${gateway.server.address().port}`, token: state.token(), model: 'chatgpt-web/high', reasoning: 'high', env: { ...process.env, CODEX_HOME: codexHome }, args: [...(!shellMode ? ['-c', 'tools.update_plan.enabled=true'] : []), 'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', shellMode ? 'Use one harmless native command, then report its exact output.' : 'Update the plan with one completed transport-check step, then report completion.'] });
+  child = startCodex({ endpoint: `http://127.0.0.1:${gateway.server.address().port}`, token: state.token(), model: 'chatgpt-web/high', catalogPath, reasoning: 'high', env: { ...process.env, CODEX_HOME: codexHome }, args: [...(!shellMode ? ['-c', 'tools.update_plan.enabled=true'] : []), 'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', shellMode ? 'Use one harmless native command, then report its exact output.' : 'Update the plan with one completed transport-check step, then report completion.'] });
   const timer = setTimeout(() => child.kill('SIGTERM'), 90000); timer.unref();
   const code = await new Promise((r, reject) => { child.once('error', reject); child.once('exit', r); }); clearTimeout(timer);
   if (failure) throw failure;

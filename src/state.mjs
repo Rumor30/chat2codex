@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync, lstatSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync, lstatSync, chmodSync, fsyncSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -23,10 +23,28 @@ export function readJson(path, fallback) {
 export function writeJson(path, value) {
   ensure(!existsSync(path) || !lstatSync(path).isSymbolicLink(), 500, 'unsafe_path', 'State file must not be a symlink');
   const temporary = `${path}.${opaque('tmp')}`;
-  try { writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx' }); renameSync(temporary, path); }
+  try {
+    const fd = openSync(temporary, 'wx', 0o600);
+    try { writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(temporary, path);
+  }
   finally { try { unlinkSync(temporary); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
 }
-export function lock(path) {
+export function recoverLock(path, alive = pid => {
+  try { process.kill(pid, 0); return true; } catch (e) { if (e.code === 'ESRCH') return false; return true; }
+}) {
+  if (!existsSync(path)) return false;
+  const before = lstatSync(path);
+  ensure(before.isFile() && !before.isSymbolicLink(), 409, 'unsafe_lock', 'Lock is not an ordinary file');
+  const text = readFileSync(path, 'utf8').trim();
+  ensure(/^[1-9][0-9]{0,10}$/.test(text), 409, 'invalid_lock', 'Lock owner cannot be determined safely');
+  if (alive(Number(text))) return false;
+  const after = lstatSync(path);
+  ensure(before.ino === after.ino && before.dev === after.dev && readFileSync(path, 'utf8').trim() === text, 409, 'lock_changed', 'Lock owner changed during recovery');
+  unlinkSync(path); return true;
+}
+export function lock(path, { reclaim = false } = {}) {
+  if (reclaim) recoverLock(path);
   let fd;
   try { fd = openSync(path, 'wx', 0o600); writeFileSync(fd, String(process.pid)); }
   catch (e) { if (e.code === 'EEXIST') throw new Fault(409, 'state_locked', 'Another process owns this state. For a stale lock, verify its PID before removing it.'); throw e; }
@@ -57,7 +75,7 @@ export class State {
     try { const accounts = this.list(); const result = fn(accounts); writeJson(this.file, { version: 1, accounts }); return result; }
     finally { release(); }
   }
-  add(label, maxThreads = 5) {
+  add(label, maxThreads = 1) {
     ensure(typeof label === 'string' && label.trim().length > 0 && label.length <= 100, 400, 'bad_label', 'Use a label between 1 and 100 characters');
     ensure(Number.isInteger(maxThreads) && maxThreads >= 1 && maxThreads <= 5, 400, 'bad_capacity', 'Capacity must be between 1 and 5');
     return this.mutate(accounts => {
@@ -67,6 +85,19 @@ export class State {
     });
   }
   enable(id, enabled) { return this.mutate(accounts => { const a = accounts.find(a => a.id === id); ensure(a, 404, 'account_not_found', 'Unknown account'); a.enabled = enabled; return a; }); }
+  update(id, { label, maxThreads, archived } = {}) {
+    return this.mutate(accounts => {
+      const a = accounts.find(a => a.id === id); ensure(a, 404, 'account_not_found', 'Unknown account');
+      if (label !== undefined) {
+        ensure(typeof label === 'string' && label.trim() && label.length <= 100, 400, 'bad_label', 'Use a label between 1 and 100 characters'); a.label = label.trim();
+      }
+      if (maxThreads !== undefined) {
+        ensure(Number.isInteger(maxThreads) && maxThreads >= 1 && maxThreads <= 5, 400, 'bad_capacity', 'Capacity must be between 1 and 5'); a.maxThreads = maxThreads;
+      }
+      if (archived !== undefined) { ensure(typeof archived === 'boolean', 400, 'bad_archive', 'Archive must be boolean'); a.archived = archived; if (archived) a.enabled = false; }
+      return a;
+    });
+  }
   token(path = join(this.home, 'gateway.key')) {
     try { writeFileSync(path, randomBytes(32).toString('base64url'), { mode: 0o600, flag: 'wx' }); }
     catch (e) { if (e.code !== 'EEXIST') throw e; }
