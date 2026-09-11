@@ -2,7 +2,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { State } from '../src/state.mjs';
@@ -11,7 +10,9 @@ import { startCodex } from '../src/codex.mjs';
 const entry = resolve('.runtime/codex-smoke/node_modules/@openai/codex/bin/codex.js');
 assert(existsSync(entry), 'Install the pinned @openai/codex package into .runtime/codex-smoke first');
 process.env.CHAT2CODEX_CODEX = entry;
-const home = mkdtempSync(join(tmpdir(), 'c2c-native-')); const codexHome = join(home, 'codex'); mkdirSync(codexHome);
+// Keep the managed Codex home outside OS temp: native helper installation rejects /tmp.
+const smokeRoot = resolve('.runtime'); mkdirSync(smokeRoot, { recursive: true });
+const home = mkdtempSync(join(smokeRoot, 'c2c-native-')); const codexHome = join(home, 'codex'); mkdirSync(codexHome);
 const config = '# Sentinel: Chat2Codex must not replace this configuration.\n';
 const auth = '{"OPENAI_API_KEY":"fixture-only-not-an-openai-key"}\n';
 writeFileSync(join(codexHome, 'config.toml'), config); writeFileSync(join(codexHome, 'auth.json'), auth);
@@ -36,7 +37,7 @@ const fixture = createServer(async (req, res) => {
     nativeMetadata ||= typeof meta?.thread_id === 'string' && typeof meta?.turn_id === 'string';
     const result = body.input?.find(i => ['function_call_output', 'custom_tool_call_output'].includes(i.type) && i.call_id === callId);
     if (result) {
-      assert(JSON.stringify(result.output).includes(marker), 'Native tool output must include the generated marker'); witnessedTool = true;
+      assert(JSON.stringify(result.output).includes(marker), `Native tool output must include the generated marker; fixture receipt: ${JSON.stringify(result.output).slice(0, 4000)}`); witnessedTool = true;
       emit(res, { type: 'message', id: 'msg_done', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: marker, annotations: [] }] }); return;
     }
     assert(requests <= 3, 'Codex did not return the native tool result');

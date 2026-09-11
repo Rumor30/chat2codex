@@ -52,5 +52,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --prefix .runtime/codex-smoke --no-save @openai/codex@0.125.0
+      - run: npm install --prefix .runtime/codex-smoke --no-save @openai/codex@0.154.0
       - run: node scripts/codex-smoke.mjs
