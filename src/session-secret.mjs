@@ -68,7 +68,7 @@ async function hiddenInput(input, output) {
         if (byte === 3) return finish(Object.assign(new Error('Session import cancelled'), { code: 'operation_cancelled' }));
         if (byte === 13 || byte === 10) return finish();
         if (byte === 8 || byte === 127) { value = value.slice(0, -1); continue; }
-        ensure(value.length < 65536, 413, 'session_input_too_large', 'Session input exceeded the size limit');
+        if (value.length >= 65536) return finish(Object.assign(new Error('Session input exceeded the size limit'), { code: 'session_input_too_large' }));
         value += Buffer.from([byte]).toString('utf8');
       }
     };
