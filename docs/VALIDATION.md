@@ -1,59 +1,68 @@
 # 验证记录
 
-## 本轮已执行
+## 0.2.0 本轮结果
 
-日期：2026-09-11。环境：Linux，Node.js v22.16.0。
+记录日期：2026-09-11（CI 使用 UTC）。本地环境 Node.js 22.16.0 / Linux。
 
-- `npm run check`：通过 JavaScript 语法检查。
-- `npm test`：52 项通过，0 项失败。
-- 真实本地 HTTP server/client 测试了 SSE 原始字节、Unicode 分块、普通/自定义工具回执、跨请求账号粘性、压缩路由、429 不重试、截断失败、管理鉴权及 CSP。
-- 工具执行 worker 在上述网络测试中是**明确的 fixture**，不是真实 ChatGPT 账号。测试不会声称已修改任何用户项目。
-- 浏览器 UI 自动化尝试受到本环境 Chromium 的 `ERR_BLOCKED_BY_ADMINISTRATOR` 限制；没有将该次尝试记录为通过。
+`npm run check` 通过；`npm test` **117 项通过、0 失败**。测试覆盖账号隔离、持久化操作、真实子进程取消、HTTP/SSE、逐轮工具回执、维护互斥、状态写入失败、线程释放/重放保护及身份接口的字段脱敏。
 
-## GitHub Actions 已观察结果
+已读取代码提交 **`0978c2f00b2ed80a8686ba778ca7b2037b15c70b`** 的 PR workflow **`34619912951`**：**7 个作业全部成功**。
 
-已检查代码提交 `4cc81e425049a398a022f82d10af43f0e8f99feb` 的 PR run `34608302002`，六项作业均成功：
+| 作业 | 实际验证内容 | 结果 |
+| --- | --- | --- |
+| core / Ubuntu | Node 语法和全部核心测试 | 通过 |
+| core / Windows | Node 语法和核心测试；symlink 权限测试明确跳过 | 通过 |
+| core / macOS | Node 语法和核心测试 | 通过 |
+| pinned-bridge | 锁定上游安装、TypeScript、Bun 打包、不同账号 Tunnel 别名 | 通过 |
+| native-codex-fixture / Ubuntu | 真正 Codex 0.154.0、完整模型目录、原生计划工具回执 | 通过 |
+| native-codex-fixture / Windows | 同上，并验证 config.toml / auth.json 字节不变 | 通过 |
+| desktop-integration / Ubuntu | 全量 Electron/renderer 构建、实际 Chromium 页面操作、实际 Electron 空白账号启动 | 通过 |
 
-| 作业 | 结果 |
-| --- | --- |
-| core / Ubuntu | 通过 |
-| core / Windows | 通过；symlink 权限测试明确跳过 |
-| core / macOS | 通过 |
-| pinned-bridge / Ubuntu | 上游安装、TypeScript、Bun 打包和两个账号的 Tunnel 别名隔离检查通过 |
-| native-codex-fixture / Ubuntu | Codex 0.154.0 的原生计划工具闭环通过 |
-| native-codex-fixture / Windows | Codex 0.154.0 的原生计划工具闭环通过 |
+### 真实 Chromium 界面检查
 
-真实 Codex 测试实际启动 CLI、经本地网关接收 `function_call`、执行 `update_plan`、回传精确的 `Plan updated`，最后接收最终回答；同时验证原生 thread/turn metadata，以及预置的 config.toml/auth.json 字节未变。模型输出由明确的本地 fixture 产生，不是 ChatGPT 推理。
+通过 `scripts/ui-smoke.mjs` 启动真实浏览器，访问真实本地 Chat2Codex HTTP 服务。worker/模型/账号仍是明确的 fixture。验证了：一次性邀请、密钥不进浏览器持久存储、Tunnel 表单、敏感输入清空、账号名作为文本而非 HTML、锁定操作和 390px 窄屏无横向溢出。
 
-默认计划工具在此版本需要测试进程临时设置 `tools.update_plan.enabled=true`；测试不改变用户配置文件，不增加 shell 权限。实际日志仍出现自定义模型未找到完整 catalog metadata 的警告，完整模型目录/桌面选择器集成尚未完成。
+同一作业还在实际 Chromium 中验证**合成 Connector DOM**：只填精确表单、选择正确 Tunnel ID、工具扫描门槛、不提前创建、禁用安全控件停下、歧义输入不提交。这不是 ChatGPT 服务端创建测试。
 
-初始 36 项测试的 CI run `34604375376` 也通过，随后扩展到 52 项。后续提交的结果以对应 Checks 为准；本记录不声称未检查过的提交也已经通过。
+已下载并查看该作业的桌面/移动截图。截图显示“界面测试账号”，没有真实 ChatGPT 登录、Cookie 或账号信息。
 
-## 独立验证层
+### 真实 Electron 启动检查
 
-1. 网关/路由的本地单元和 HTTP 集成测试。
-2. `bridge:check`：安装锁定上游之后的 TypeScript + Bun 打包检查，验证实际导出/接口，不运行模型。
-3. `scripts/codex-smoke.mjs`：真实 Codex 0.154.0 CLI + 明确的本地模型 fixture，通过原生 `update_plan` 检查工具回执、metadata 和 config/auth 不变；不使用真实 ChatGPT，也不把此项当作 shell 执行验证。
-4. 每账号真实 MCP nonce echo 探针：在用户的已登录独立浏览器中执行。
-5. 真正 Codex → 网页 → MCP → Codex 的项目任务和跨账号并行测试。
+`scripts/launcher-smoke.mjs` 在 Xvfb 桌面中实际启动安装后的 Electron 41.10.7，使用新建的空白独立账号目录。读取真实 descriptor，确认 development profile、预期 partition、本地设置扩展已挂载，未鉴权控制请求被拒绝。
 
-层 1/2/3 通过不等于层 4/5 通过。管理台的 Ready 必须来自层 4，不得由手动 metadata 或测试 fixture 推导。
+本次检查使用 Electron 正常沙箱。CI 先把锁定依赖中的 `chrome-sandbox` 安装为 root 所有、4755 权限；没有加入 `--no-sandbox`。该过程只在一次性 CI runner 执行。本机源码安装是否需要管理员配置，取决于其正常系统安全策略。
 
-## 已遇到并保留的兼容性/环境限制
+**空白账号能启动不代表 ChatGPT 登录成功，更不代表 MCP/Tunnel 已连通。**
 
-- Codex 0.125.0 的 Windows shell 在本地 fixture 中执行了命令，但缺少当前网页桥所需的原生 turn metadata，因此整个检查未通过，不列为兼容版本。
-- Codex 0.154.0 的 CI shell 检查：Linux 返回 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`；Windows 返回命令被策略拒绝。没有关闭沙箱或绕过该限制。
-- 最初的测试仅搜索 nonce 子串，可能把“错误消息里引用的命令”误判为成功；已修正为必须同时出现零退出码与独立 stdout 行，并增加四项回归测试。旧检查日志里的 PASS 字样不能作为 shell 成功证据。
-- 默认 CLI smoke 改为不依赖操作系统命令的原生 `update_plan` 工具；需要严格返回 `Plan updated`。这验证真实工具协议闭环，不验证 shell。
-- 独立 shell 检查仍保留：`node scripts/codex-smoke.mjs --shell`。必须在允许正常建立 Codex 沙箱的本机运行，不建议关闭沙箱来让测试通过。
+### 真实 Codex 协议检查
 
-## 尚待真实账号验收
+`scripts/codex-smoke.mjs` 使用实际 Codex 0.154.0，接收本地 fixture 模型生成的 Responses `function_call`，执行它自己注册的 `update_plan`，返回精确 `Plan updated`，再接收最终回答。完整公开模型目录通过 `-c model_catalog_json` 注入，支持当前的 `model_messages.instructions_template`。
 
-- 两个独立账号并发时 Cookie、Tunnel、工具回执不串号。
-- Codex 的 `exec_command`、freeform `apply_patch`、配置中的 MCP、图片结果。
-- 长回答取消、等待工具期间取消、浏览器关闭、Tunnel 断线。
-- 自动压缩以及多 agent 子任务。
-- Windows / macOS 本机 Electron 启动与权限流程。
-- Session 方式创建 Connector 的真实请求链与重复创建恢复。
+测试核对原生 thread/turn metadata，以及测试环境预先放置的 `config.toml`、`auth.json` 字节不变。其模型端不是 ChatGPT；该检查不包含网页、MCP、真实模型推理或 shell。
 
-当前没有用户已登录的浏览器、Tunnel key 或用户本机 Codex 环境；CI 的真实 Codex + 本地 fixture 不能代替以上真实账号验收。
+## 本轮发现并修复的问题
+
+1. 上游 launcher 所需的 `.launcher-runtime/browser-helper.cjs` 未生成；bootstrap 已补齐。
+2. 原模板验证只接受旧 `base_instructions`，真实 Codex 新模板使用 `model_messages`；已兼容并加回归测试。
+3. Linux Electron 正常 sandbox helper 缺少安装权限；CI 按正常方式安装，并给用户明确诊断。
+4. 未成功启动的 owned Electron 子进程可能阻止退出；已增加有界退出，只处理本程序创建的子进程，不扫描/终止其他程序。
+5. 释放线程后旧记录积累会消耗活跃容量；改为追加式哈希重放日志，测试超过 1000 次完成释放后的新任务接入。
+6. 最终路由状态写入失败可能使异步 HTTP handler 崩溃；现在停止新增模型工作而保留控制台。
+7. 一个模型探针成功被当作整个账号所有模型可用；现在逐模型授权并绑定登录身份和配置指纹。
+
+## 明确没有完成的验收
+
+- 真实授权账号的首次登录、实际当前 ChatGPT Apps DOM、Connector 创建与工具扫描。
+- 完整 ChatGPT Web → MCP → Tunnel → TurnBroker → Codex → 工具回执 → 网页推理的真实用户任务。
+- 两个真实账号并发、图片回执、真实 shell/patch、多 agent、长任务压缩和登录主体/工作区切换。
+- Windows/macOS 本机 Electron 首次安装全流程、签名独立安装包和 Codex App 整体接入。
+
+没有用户的已登录浏览器/Tunnel 授权环境，因此这些项目没有被写为通过；源码中的真实 MCP nonce 探针必须在本机实际通过后，网关才放行对应模型。
+
+## 历史兼容性与不得误读的测试
+
+0.1 的代码提交 `4cc81e425049a398a022f82d10af43f0e8f99feb`、PR run `34608302002` 六项检查曾全部通过。之后的结果必须按对应提交重新确认，本记录不推断未经检查的未来提交成功。
+
+Codex 0.125.0 缺少当前网页桥要求的原生 turn metadata，不列为兼容版本。0.154.0 的独立 CI shell 检查曾遭遇 Linux bwrap 命名空间权限失败和 Windows 策略拒绝；未记为成功，没有关闭沙箱绕过。默认改用原生计划工具验证协议，`--shell` 仍作为独立检查保留。
+
+早期 shell fixture 用 nonce 子串判断可能把“错误消息引用命令”误判为成功，已修正为**零退出码 + 独立 stdout 行**并增加回归测试。旧日志中的单独 PASS 字样不是 shell 成功证据。

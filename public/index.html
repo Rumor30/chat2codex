@@ -1,6 +1,18 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chat2Codex</title><link rel="stylesheet" href="/style.css"></head>
-<body><main><header><div class="brand">C2C <span>LOCAL WORKSPACE</span></div><h1>你的账号，<br>一个 Responses 入口。</h1><p>真实 ChatGPT Web · 隔离登录 · 原生 MCP 工具回路</p></header>
-<section id="login"><h2>连接本地管理台</h2><p>在本机运行 <code>node src/cli.mjs token</code>，粘贴本地管理密钥。它不是 ChatGPT session。</p><form id="auth"><input id="key" type="password" autocomplete="off" placeholder="本地 API key" required><button>连接</button></form></section>
-<div id="workspace" hidden><section class="toolbar"><div><h2>账号池</h2><p>停用仅阻止新任务，不迁移进行中的工具调用。</p></div><button id="refresh">刷新状态</button></section><form id="add"><input id="label" maxlength="100" placeholder="给新账号起个名字" required><button>添加账号</button></form><div id="accounts" class="grid"></div>
-<section><h2>任务绑定</h2><div id="threads"></div></section><section><h2>接入 Codex</h2><p>启动参数只作用于新进程，不写入你的 <code>config.toml</code> 或 <code>auth.json</code>。</p><code id="command">node src/cli.mjs codex --model chatgpt-web/high</code><p>首次设置：打开账号独立启动器，登录，完成 Full MCP 配置，再执行真实 MCP 探针。探针通过后账号才会进入 Ready。</p></section></div>
-<p id="message" role="status" aria-live="polite"></p><footer>0.1.0 · 开发预览 · 密钥仅保存在当前页面内存，不上传、不写入浏览器存储。</footer></main><script src="/app.js" type="module"></script></body></html>
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chat2Codex · 本地控制台</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+<header><div class="brand">C2C <span>CHATGPT WEB → CODEX</span><small>0.2.0</small></div><h1>一个入口。<br>独立账号，真实工具。</h1><p>登录态留在本机，工具由 Codex 执行。每个模型通过真实 MCP 验证后才开放。</p></header>
+<section id="login"><h2>连接本地控制台</h2><p>使用启动脚本可自动连接。也可运行 <code>node src/cli.mjs token</code> 获取本地管理密钥；不要填 ChatGPT Cookie。</p><form id="auth"><label class="sr-only" for="key">本地管理密钥</label><input id="key" type="password" autocomplete="off" placeholder="本地 API key" required><button>连接控制台</button></form></section>
+<div id="workspace" hidden>
+<nav><a href="#accounts-section">账号池</a><a href="#threads-section">任务</a><a href="#jobs-section">配置进度</a><a href="#connect-section">API 接入</a><button class="secondary" id="refresh">刷新</button><button class="secondary" id="logout">锁定</button></nav>
+<section id="system"><div class="toolbar"><h2>运行环境</h2><button class="secondary" id="diagnose">重新检查</button></div><div id="checks" class="checks"></div></section>
+<section id="accounts-section"><div class="toolbar"><div><h2>账号池</h2><p>每个账号一个独立登录窗口；同一个任务不会中途换号。</p></div><span id="count" class="badge">0 个账号</span></div>
+<form id="add"><label class="sr-only" for="label">新账号名称</label><input id="label" maxlength="100" placeholder="例如：个人 Pro / 工作账号" required><button>＋ 添加账号</button></form><div id="accounts" class="grid"></div></section>
+<section id="jobs-section"><div class="toolbar"><h2>配置进度</h2><span class="muted">需要确认时，请查看账号窗口</span></div><div id="jobs"></div></section>
+<section id="threads-section"><h2>任务绑定</h2><p>完成后可单独释放线程。取消不会撤销 Codex 已经执行的文件修改。</p><div id="threads"></div></section>
+<section id="connect-section"><h2>接入 Codex</h2><div class="connection"><span class="muted">Base URL</span><code id="endpoint"></code><span class="muted">启动命令</span><code>node src/cli.mjs codex --model chatgpt-web/high</code></div><p>模型必须出现在账号的“已验证”列表中。进程级配置不修改你的 <code>config.toml</code> 或 <code>auth.json</code>。</p><div class="actions"><button class="secondary" id="copy-key">复制本地 API key</button><button class="secondary" id="export">导出脱敏诊断</button></div></section>
+</div>
+<div id="message" role="status" aria-live="polite"></div>
+<footer>非官方本地集成 · 设置助手遇到未知页面或安全确认会停止。需要你正常拥有相关账号与工作区权限。</footer>
+<dialog id="setup"><form id="configure"><h2>配置账号 Tunnel</h2><p id="setup-account"></p><label for="tunnel-id">Tunnel ID</label><input id="tunnel-id" placeholder="tunnel_…" pattern="tunnel_[a-f0-9]{32}" required><label for="runtime-key">Runtime key</label><input id="runtime-key" type="password" autocomplete="off" minlength="20" required><p class="muted">请先在该账号的独立窗口登录。密钥只发送到本地配置进程，保存于该账号的私有配置，不写入操作日志。</p><label class="consent"><input id="consent" type="checkbox" required>我拥有此账号和 Tunnel 的授权，知悉这是非官方集成，同意配置该连接。</label><div class="actions"><button type="submit">保存并连接 Tunnel</button><button type="button" class="secondary" id="close-setup">取消</button></div></form></dialog>
+</main><script src="/app.js" type="module"></script></body></html>

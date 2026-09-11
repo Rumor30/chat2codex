@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync } from 'node:fs';
+import { copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { PROJECT, checkedRuntime } from '../src/runtime.mjs';
 const root = checkedRuntime(); const bun = process.env.CHAT2CODEX_BUN || 'bun';
 copyFileSync(join(PROJECT, 'bridge', 'worker.ts'), join(root, '.chat2codex-worker.ts'));
+copyFileSync(join(PROJECT, 'bridge', 'setup.ts'), join(root, '.chat2codex-setup.ts'));
 for (const args of [
   ['x', '--no-install', '--bun', 'tsc', '--noEmit', '--project', '.chat2codex-tsconfig.json'],
   ['build', '.chat2codex-worker.ts', '--target', 'bun', '--outfile', '.chat2codex-worker-check.js'],
@@ -22,3 +23,5 @@ for (const digit of ['a', 'b']) {
 }
 if (seen.size !== 2) throw new Error('Two accounts shared a Tunnel runtime alias');
 console.log('Pinned bridge imports and TypeScript checked. This is not a logged-in browser E2E test.');
+
+if (!existsSync(join(root, '.launcher-runtime/browser-helper.cjs'))) throw new Error('Launcher browser helper is missing');

@@ -3,14 +3,19 @@ import { parseArgs } from 'node:util';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { State, ensure, lock } from './state.mjs';
+import { State, ensure, lock, readJson } from './state.mjs';
 import { Workers, launchAccount, setupAccount, checkedRuntime, profileEnvironment } from './runtime.mjs';
 import { createGateway } from './gateway.mjs';
+import { catalogFile } from './catalog.mjs';
+import { openLocal } from './open-local.mjs';
+import { inspectSystem } from './system.mjs';
+import { PROJECT } from './runtime.mjs';
 import { startCodex } from './codex.mjs';
 
-const HELP = `chat2codex 0.1.0 — development preview
+const HELP = `chat2codex 0.2.0 — browser integration beta
 
 npm run bootstrap                             Install pinned upstream browser bridge
+node src/cli.mjs start                        Check/install runtime and open the dashboard
 node src/cli.mjs serve [--port 7841]            Local API and account dashboard
 node src/cli.mjs token                         Print the LOCAL management key
 node src/cli.mjs account add --label "Pro A"    Create an isolated profile
@@ -27,12 +32,12 @@ node src/cli.mjs codex --model chatgpt-web/high [--account ID] [-- CODEX_ARGS...
 
 Use CHAT2CODEX_HOME for separate storage. No ChatGPT cookies are imported/exported.
 The browser launcher must complete Full MCP setup. A real MCP probe gates Ready.
-Private session-based Connector creation is NOT implemented or claimed verified.
+The settings assistant reuses your logged-in browser; unknown controls and security prompts need user review.
 `;
 function options(args) {
   return parseArgs({ args, allowPositionals: true, strict: true, options: {
     port: { type: 'string', default: '7841' }, label: { type: 'string' }, model: { type: 'string' },
-    account: { type: 'string' }, 'tunnel-id': { type: 'string' }, 'key-file': { type: 'string' }, 'max-threads': { type: 'string', default: '5' },
+    account: { type: 'string' }, 'tunnel-id': { type: 'string' }, 'key-file': { type: 'string' }, 'max-threads': { type: 'string', default: '1' },
   } });
 }
 function wait(child) { return new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve(signal ? 130 : code ?? 1)); }); }
@@ -50,7 +55,11 @@ export async function main(argv = process.argv.slice(2)) {
     const data = await r.json(); ensure(r.ok, r.status, data.error?.code || 'api_error', data.error?.message || 'API request failed'); return data;
   };
   if (command === 'token') { console.log(state.token()); return 0; }
-  if (command === 'doctor') { console.log(JSON.stringify(await api('/api/accounts'), null, 2)); return 0; }
+  if (command === 'doctor') {
+    const system = inspectSystem(); let accounts;
+    try { accounts = await api('/api/accounts'); } catch { accounts = { gateway: 'offline' }; }
+    console.log(JSON.stringify({ system, ...accounts }, null, 2)); return 0;
+  }
   if (command === 'account') {
     if (action === 'add') { console.log(JSON.stringify(state.add(values.label, Number(values['max-threads'])), null, 2)); return 0; }
     if (action === 'list') { console.log(JSON.stringify(state.list(), null, 2)); return 0; }
@@ -71,10 +80,19 @@ export async function main(argv = process.argv.slice(2)) {
     const catalog = await api('/v1/models'); const model = catalog.data.find(m => m.id === values.model);
     ensure(model, 409, 'model_not_ready', 'The requested model has no verified Ready account');
     return await wait(startCodex({ endpoint, token: state.token(), model: values.model, account: values.account, args: passthrough,
-      reasoning: model.default_reasoning_level, contextWindow: model.context_window, autoCompact: model.auto_compact_token_limit }));
+      catalogPath: catalogFile(state.home, catalog.data), reasoning: model.default_reasoning_level, contextWindow: model.context_window, autoCompact: model.auto_compact_token_limit }));
   }
-  if (command === 'serve') {
-    const release = lock(join(state.home, 'gateway.lock')); const workers = new Workers(state);
+  if (command === 'serve' || command === 'start') {
+    if (command === 'start') {
+      try { const root = checkedRuntime(); ensure(readJson(join(root, '.chat2codex-build.json'), {}).launcher === true, 503, 'launcher_missing', 'Desktop runtime is not installed'); }
+      catch {
+        const system = inspectSystem();
+        ensure(system.checks.filter(c => ['node', 'git', 'bun'].includes(c.name)).every(c => c.ok), 503, 'dependencies_required', 'Install Node.js 22+, Git, and Bun 1.4.0 first; run node src/cli.mjs doctor for details');
+        const exit = await wait(spawn(process.execPath, [join(PROJECT, 'scripts/bootstrap.mjs')], { cwd: PROJECT, stdio: 'inherit', shell: false }));
+        if (exit !== 0) return exit;
+      }
+    }
+    const release = lock(join(state.home, 'gateway.lock'), { reclaim: true }); const workers = new Workers(state);
     const gateway = createGateway({ state, workers });
     let closed = false;
     const close = async () => { if (closed) return; closed = true; await gateway.close(); await workers.close(); release(); };
@@ -82,6 +100,7 @@ export async function main(argv = process.argv.slice(2)) {
       await new Promise((resolve, reject) => { gateway.server.once('error', reject); gateway.server.listen(port, '127.0.0.1', resolve); });
       console.log(`Chat2Codex dashboard: ${endpoint}\nResponses API: ${endpoint}/v1\nUse the token command to unlock the local dashboard.`);
       workers.startEnabled();
+      if (command === 'start') await openLocal(`${endpoint}/#invite=${gateway.invitations.issue()}`).catch(() => console.log('Open the displayed dashboard address and use the token command to sign in.')); 
       process.once('SIGINT', () => void close()); process.once('SIGTERM', () => void close());
     } catch (e) { await close(); throw e; }
     return 0;

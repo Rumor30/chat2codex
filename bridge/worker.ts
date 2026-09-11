@@ -9,8 +9,9 @@ import { TurnBroker } from './src/adapters/chatgpt-web/turn-broker';
 import { chatGptTurnSessions } from './src/adapters/chatgpt-web/turn-execution';
 import { closeChatGptBrowserWorkers } from './src/adapters/chatgpt-web/browser-worker';
 import { availableChatGptWebModelRoutes, resolveChatGptWebContextLimits } from './src/chatgpt-web-models';
-import { inspectLauncherBrowserHost } from './src/launcher-browser-host';
+import { inspectLauncherBrowserHostLiveness } from './src/launcher-browser-host';
 import { responseRequest, compactRequest } from './src/server';
+import { buildChatGptWebModel } from './src/model-catalog';
 import { tunnelStatus } from './src/tunnel';
 
 const home = process.env.CHAT2CODEX_ACCOUNT_HOME;
@@ -20,8 +21,11 @@ if (!home || !accountId || !keyPath) throw new Error('Worker must be started by 
 const key = readFileSync(keyPath, 'utf8').trim();
 if (!/^[A-Za-z0-9_-]{43}$/.test(key)) throw new Error('Invalid worker key');
 const paths = activateDevProfileEnvironment();
+const nativeTemplate = JSON.parse(readFileSync(join(import.meta.dir, '.chat2codex-catalog.json'), 'utf8')).models[0];
 let generation = randomBytes(16).toString('hex');
-let verifiedConfig = ''; let verifying = false; let used = false;
+const verified = new Map<string, string>(); let verifying = false;
+let boundIdentity = ''; let brokerPath = '';
+let runtimePending: Promise<any> | undefined; let runtimeCache: { value: any; at: number } | undefined;
 let broker: TurnBroker | undefined;
 const turns = new Map<string, { threadId: string; turnId: string }>();
 mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -33,31 +37,53 @@ function auth(req: Request) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 function fingerprint() { return createHash('sha256').update(readFileSync(paths.configPath)).digest('hex'); }
-async function runtime() {
-  const config = loadConfig();
-  if (config.purpose !== 'dev-harness' || config.mode !== 'full' || !config.tunnel || !config.browserHostDescriptorPath)
-    throw new Error('setup_required');
-  if (config.browserInteractionMode !== 'automatic') throw new Error('automatic_profile_required');
-  const tunnel = tunnelStatus(config);
-  if (!tunnel.ok || !tunnel.ready) throw new Error('tunnel_unavailable');
-  await inspectLauncherBrowserHost(config.browserHostDescriptorPath, { expectedProfile: 'development' });
-  if (!broker) { broker = TurnBroker.forSocket(config.brokerSocketPath); await broker.listen(); }
-  const factory = createLauncherDevAdapter(config, join(home!, 'state'), { broker, browserHelperScriptPath: join(import.meta.dir, '.chat2codex-browser-helper.cjs') }).adapterFactory;
-  return { config, factory };
+function coded(code: string): Error { return Object.assign(new Error(code), { code }); }
+async function runtime(force = false): Promise<any> {
+  if (runtimePending) return runtimePending;
+  if (!force && runtimeCache && Date.now() - runtimeCache.at < 30000) return runtimeCache.value;
+  runtimePending = (async () => {
+    let config;
+    try { config = loadConfig(); } catch { throw coded('setup_required'); }
+    if (config.purpose !== 'dev-harness' || config.mode !== 'full' || !config.tunnel || !config.browserHostDescriptorPath) throw coded('setup_required');
+    if (config.browserInteractionMode !== 'automatic') throw coded('automatic_profile_required');
+    const tunnel = tunnelStatus(config);
+    if (!tunnel.ok || !tunnel.ready) throw coded('tunnel_unavailable');
+    const descriptor = await inspectLauncherBrowserHostLiveness(config.browserHostDescriptorPath, { expectedProfile: 'development' });
+    const response = await fetch(`${descriptor.control.endpoint}/v1/chat2codex/identity`, {
+      method: 'POST', headers: { authorization: `Bearer ${descriptor.control.token}`, 'content-type': 'application/json' }, body: '{}',
+      redirect: 'error', signal: AbortSignal.timeout(7000),
+    });
+    if (!response.ok) throw coded('launcher_upgrade_required');
+    const identity = await response.json() as { accountId?: string; authenticated?: boolean; identity?: string };
+    if (!identity.authenticated) throw coded('launcher_login_required');
+    if (identity.accountId !== accountId || !identity.identity) throw coded('launcher_identity_mismatch');
+    if (boundIdentity && boundIdentity !== identity.identity) {
+      verified.clear(); chatGptTurnSessions.clear(); turns.clear();
+      generation = randomBytes(16).toString('hex'); saveDescriptor();
+    }
+    boundIdentity = identity.identity;
+    if (broker && brokerPath !== config.brokerSocketPath) throw coded('runtime_restart_required');
+    if (!broker) { broker = TurnBroker.forSocket(config.brokerSocketPath); await broker.listen(); brokerPath = config.brokerSocketPath; }
+    const factory = createLauncherDevAdapter(config, join(home!, 'state'), { broker, browserHelperScriptPath: join(import.meta.dir, '.chat2codex-browser-helper.cjs') }).adapterFactory;
+    const value = { config, factory, stamp: `${fingerprint()}:${identity.identity}` };
+    runtimeCache = { value, at: Date.now() }; return value;
+  })().finally(() => { runtimePending = undefined; });
+  return runtimePending;
 }
 async function status() {
   try {
-    const { config } = await runtime();
-    const models = availableChatGptWebModelRoutes(config).map(route => {
+    const { config, stamp } = await runtime();
+    const availableModels = availableChatGptWebModelRoutes(config).map(route => {
       const limits = resolveChatGptWebContextLimits(route.backendModel, route.adapterEffort, config);
-      return { id: route.slug, slug: route.slug, object: 'model', owned_by: 'chat2codex', display_name: route.displayName,
+      return { ...buildChatGptWebModel(nativeTemplate, route, config), prefer_websockets: false, use_responses_lite: false, supports_experimental_context: false, id: route.slug, slug: route.slug, object: 'model', owned_by: 'chat2codex', display_name: route.displayName,
         context_window: limits.contextWindow, auto_compact_token_limit: limits.autoCompactTokenLimit,
         default_reasoning_level: route.codexEffort, supported_reasoning_levels: [{ effort: route.codexEffort, description: route.displayName }] };
     });
-    const ready = !verifying && verifiedConfig === fingerprint();
-    return { accountId, generation, ready, state: ready ? 'ready' : 'needs_mcp_probe', models };
+    const models = availableModels.filter(model => verified.get(model.id) === stamp);
+    const ready = !verifying && models.length > 0;
+    return { accountId, generation, ready, state: ready ? 'ready' : verifying ? 'probe_running' : 'needs_mcp_probe', models, availableModels };
   } catch (e) {
-    const allowed = ['setup_required', 'automatic_profile_required', 'tunnel_unavailable'];
+    const allowed = ['setup_required', 'automatic_profile_required', 'tunnel_unavailable', 'launcher_login_required', 'launcher_upgrade_required', 'launcher_identity_mismatch', 'runtime_restart_required'];
     const state = e instanceof Error && allowed.includes(e.message) ? e.message : 'launcher_unavailable';
     return { accountId, generation, ready: false, state, models: [] };
   }
@@ -74,9 +100,9 @@ async function cancel(id: string) {
 }
 /** A real harmless MCP -> Responses -> result -> ChatGPT probe, not a fabricated shell receipt. */
 async function probe(model: string, signal: AbortSignal) {
-  verifiedConfig = '';
-  const { config, factory } = await runtime();
-  const expectedConfig = fingerprint(); let succeeded = false;
+  verified.delete(model);
+  const { config, factory, stamp: expectedConfig } = await runtime(true);
+  let succeeded = false;
   const nonce = randomBytes(16).toString('hex'); const threadId = crypto.randomUUID(); const turnId = crypto.randomUUID();
   const itemMeta = { turn_id: turnId };
   const escaped = home!.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -98,7 +124,7 @@ async function probe(model: string, signal: AbortSignal) {
       if (!calls.length) {
         const text = r.output.filter((i: any) => i.type === 'message' && i.phase !== 'commentary').flatMap((i: any) => i.content || []).map((b: any) => b.text || '').join('').trim();
         if (!echoed || text !== nonce) throw new Error('Probe did not prove both tool dispatch and result delivery');
-        if (fingerprint() !== expectedConfig) throw new Error('Configuration changed during verification');
+        if ((await runtime(true)).stamp !== expectedConfig) throw new Error('Configuration changed during verification');
         succeeded = true; return { verified: true, model };
       }
       for (const call of calls) {
@@ -111,9 +137,9 @@ async function probe(model: string, signal: AbortSignal) {
     throw new Error('Probe exceeded the round limit');
   } finally {
     const end = chatGptTurnSessions.cancelNativeTurn(threadId, turnId, new Error('Verification finished'));
-    try { await end.settlement; await closeChatGptBrowserWorkers(); }
+    try { await end.settlement; }
     catch (error) { succeeded = false; throw error; }
-    finally { verifiedConfig = succeeded ? expectedConfig : ''; }
+    finally { if (succeeded) verified.set(model, expectedConfig); else verified.delete(model); }
   }
 }
 const server = Bun.serve({
@@ -124,7 +150,7 @@ const server = Bun.serve({
     try {
       if (path === '/health' && req.method === 'GET') return Response.json(await status());
       if (path === '/control/verify' && req.method === 'POST') {
-        if (verifying || used) return Response.json({ error: { code: 'probe_busy', message: 'Finish or reset existing work before verifying again' } }, { status: 409 });
+        if (verifying || chatGptTurnSessions.activeCount()) return Response.json({ error: { code: 'probe_busy', message: 'Finish active work before verifying again' } }, { status: 409 });
         verifying = true;
         try {
           const body = await req.json();
@@ -135,19 +161,22 @@ const server = Bun.serve({
         if (verifying || chatGptTurnSessions.activeCount()) return Response.json({ error: { code: 'account_busy' } }, { status: 409 });
         for (const id of [...turns.keys()]) await cancel(id);
         chatGptTurnSessions.clear(); await closeChatGptBrowserWorkers();
-        verifiedConfig = ''; used = false; generation = randomBytes(16).toString('hex'); saveDescriptor();
+        verified.clear(); runtimeCache = undefined; generation = randomBytes(16).toString('hex'); saveDescriptor();
         return Response.json({ reset: true, generation, needsProbe: true });
       }
-      if (path === '/control/cancel' && req.method === 'POST') return Response.json(await cancel((await req.json()).thread_id));
+      if (['/control/cancel', '/control/release'].includes(path) && req.method === 'POST') return Response.json(await cancel((await req.json()).thread_id));
       if (req.method !== 'POST' || !['/v1/responses', '/v1/responses/compact'].includes(path)) return Response.json({ error: { code: 'not_found' } }, { status: 404 });
       if (!(await status()).ready || verifying) return Response.json({ error: { code: 'mcp_not_verified', message: 'Complete the real MCP probe before sending tasks' } }, { status: 503 });
       const body = await req.clone().json(); const identity = nativeIdentity(body); const id = req.headers.get('x-chat2codex-thread');
       if (!identity || !id) return Response.json({ error: { code: 'native_metadata_required', message: 'This adapter requires native Codex thread/turn metadata; arbitrary Responses clients are not yet supported' } }, { status: 400 });
-      turns.set(id, identity); used = true;
-      const { config, factory } = await runtime();
+      if (identity.threadId !== id) return Response.json({ error: { code: 'identity_conflict' } }, { status: 409 });
+      const { config, factory, stamp } = await runtime(true);
+      if (verified.get(body.model) !== stamp) return Response.json({ error: { code: 'model_not_verified', message: 'Run the MCP probe for this exact model first' } }, { status: 409 });
+      turns.set(id, identity);
       return await (path.endsWith('/compact') ? compactRequest(req, config, factory) : responseRequest(req, config, factory));
-    } catch {
-      return Response.json({ error: { code: 'web_bridge_error', message: 'Browser/MCP bridge failed. Check the isolated launcher, tunnel, and account permissions; no fallback model was used.' } }, { status: 502 });
+    } catch (error) {
+      const code = typeof (error as any)?.code === 'string' && /^[a-z0-9_]{1,80}$/.test((error as any).code) ? (error as any).code : 'web_bridge_error';
+      return Response.json({ error: { code, message: 'Browser/MCP bridge failed. Check the isolated launcher, tunnel, and account permissions; no fallback model was used.' } }, { status: 502 });
     }
   },
 });

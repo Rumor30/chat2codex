@@ -125,3 +125,52 @@ test('account reset blocks admission to its existing threads until cleanup settl
   finally { resume(); }
   assert.equal((await reset).status, 200); assert(!h.gateway.router.threads.has('bound'));
 });
+
+test('dashboard invitation is single-use and rejects cross-origin exchange', async t => {
+  const h = await harness(t, (_req, res) => response(res, 'unused', [])); const ticket = h.gateway.invitations.issue();
+  const exchange = (headers = {}) => fetch(`${h.endpoint}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ ticket }) });
+  assert.equal((await exchange({ origin: 'https://evil.invalid' })).status, 403);
+  const first = await exchange(); assert.equal(first.status, 200); assert.equal((await first.json()).key, h.key);
+  assert.equal((await exchange()).status, 401);
+});
+test('async configure is account-exclusive and never publishes secret fields', async t => {
+  const h = await harness(t, (_req, res) => response(res, 'unused', [])); const id = h.accounts[0].id;
+  let resume; const block = new Promise(r => { resume = r; }); let seen;
+  h.workers.configure = async (_id, body) => { seen = body.runtimeKey; await block; return { code: 'completed', token: body.runtimeKey }; };
+  const r = await h.post({ action: 'configure', consent: true, tunnelId: `tunnel_${'a'.repeat(32)}`, runtimeKey: 'secret-fixture-123456789' }, {}, `/api/accounts/${id}/actions`);
+  assert.equal(r.status, 202); const receipt = await r.json(); assert.equal(receipt.state, 'running'); assert(!JSON.stringify(receipt).includes('secret-fixture'));
+  try {
+    assert.equal((await h.post(request('blocked'), { 'x-chat2codex-account': id })).status, 503);
+    assert.equal((await h.post({ action: 'verify', model: 'chatgpt-web/high' }, {}, `/api/accounts/${id}/actions`)).status, 409);
+  } finally { resume(); }
+  await Promise.all([...h.gateway.jobs.controllers.values()].map(c => c.settled));
+  assert.equal(seen, 'secret-fixture-123456789'); assert(!JSON.stringify(h.gateway.jobs.list()).includes(seen));
+  assert(!JSON.stringify(h.gateway.diagnostics.report()).includes(seen));
+});
+test('settings endpoint cannot bypass the archive lifecycle gate', async t => {
+  const h = await harness(t, (_req, res) => response(res, 'unused', []));
+  const r = await h.post({ archived: true }, {}, `/api/accounts/${h.accounts[0].id}/settings`);
+  assert.equal(r.status, 409); assert.equal((await r.json()).error.code, 'archive_action_required');
+});
+test('individual retirement frees capacity but does not permit stale thread replay', async t => {
+  const h = await harness(t, (_req, res, body) => response(res, `r_${body.prompt_cache_key}`, []));
+  await (await h.post(request('finished'))).text(); const owner = h.gateway.router.threads.get('finished').accountId;
+  const retired = await h.post({ thread_id: 'finished' }, {}, '/api/threads/retire'); assert.equal(retired.status, 200); await retired.text();
+  assert.equal(h.gateway.router.counts(owner), 0); assert.equal((await h.post(request('finished'))).status, 409);
+  assert.equal((await h.post(request('new'), { 'x-chat2codex-account': owner })).status, 200);
+});
+test('admin snapshots omit large model instructions while API catalog preserves them', async t => {
+  const h = await harness(t, (_req, res) => response(res, 'unused', []));
+  for (const w of h.snapshots.values()) w.models[0].base_instructions = 'PUBLIC_NATIVE_TEMPLATE';
+  const headers = { authorization: `Bearer ${h.key}` };
+  assert(!(await (await fetch(`${h.endpoint}/api/accounts`, { headers })).text()).includes('PUBLIC_NATIVE_TEMPLATE'));
+  assert((await (await fetch(`${h.endpoint}/v1/models`, { headers })).text()).includes('PUBLIC_NATIVE_TEMPLATE'));
+});
+
+test('storage failure during request settlement does not crash the HTTP server', async t => {
+  const h = await harness(t, (_req, res, body) => response(res, `r_${body.prompt_cache_key}`, []));
+  h.gateway.router.finish = () => { throw new Error('disk full'); };
+  await (await h.post(request('settlement'))).text();
+  const second = await h.post(request('next')); assert.equal(second.status, 503); assert.equal((await second.json()).error.code, 'storage_unavailable');
+  assert.equal((await fetch(`${h.endpoint}/health`)).status, 200); assert.equal(h.requests.length, 1);
+});
