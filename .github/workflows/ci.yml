@@ -43,6 +43,7 @@ jobs:
             THIRD_PARTY_NOTICES.md
   native-codex-fixture:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}

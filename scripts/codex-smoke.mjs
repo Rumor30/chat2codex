@@ -1,9 +1,11 @@
 /** Uses the real pinned Codex CLI with an explicit LOCAL fixture model, not a ChatGPT login. */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { successfulShellReceipt } from './smoke-receipt.mjs';
 import { State } from '../src/state.mjs';
 import { createGateway } from '../src/gateway.mjs';
 import { startCodex } from '../src/codex.mjs';
@@ -17,6 +19,7 @@ const config = '# Sentinel: Chat2Codex must not replace this configuration.\n';
 const auth = '{"OPENAI_API_KEY":"fixture-only-not-an-openai-key"}\n';
 writeFileSync(join(codexHome, 'config.toml'), config); writeFileSync(join(codexHome, 'auth.json'), auth);
 const marker = `C2C_NATIVE_${randomUUID().replaceAll('-', '')}`; const callId = 'call_c2c_native_probe';
+const shellMode = process.argv.includes('--shell');
 let requests = 0; let witnessedTool = false; let nativeMetadata = false; let failure; let child;
 function emit(res, item) {
   const id = `resp_${randomUUID()}`;
@@ -37,22 +40,25 @@ const fixture = createServer(async (req, res) => {
     nativeMetadata ||= typeof meta?.thread_id === 'string' && typeof meta?.turn_id === 'string';
     const result = body.input?.find(i => ['function_call_output', 'custom_tool_call_output'].includes(i.type) && i.call_id === callId);
     if (result) {
-      assert(JSON.stringify(result.output).includes(marker), `Native tool output must include the generated marker; fixture receipt: ${JSON.stringify(result.output).slice(0, 4000)}`); witnessedTool = true;
+      assert(shellMode ? successfulShellReceipt(result.output, marker) : result.output === 'Plan updated',
+        `Native tool did not return the expected successful receipt: ${JSON.stringify(result.output).slice(0, 4000)}`); witnessedTool = true;
       emit(res, { type: 'message', id: 'msg_done', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: marker, annotations: [] }] }); return;
     }
     assert(requests <= 3, 'Codex did not return the native tool result');
     const tools = (body.tools || []).flatMap(t => t.type === 'namespace' ? (t.tools || []).map(n => ({ ...n, namespace: t.name })) : [t]);
     const direct = tools.find(t => !t.namespace && ['exec_command', 'shell_command', 'shell'].includes(t.name));
     let item;
-    if (direct) {
+    if (!shellMode) {
+      const plan = tools.find(t => t.name === 'update_plan' && t.type === 'function');
+      assert(plan, 'Codex did not advertise the native update_plan tool');
+      item = { type: 'function_call', id: 'fc_probe', call_id: callId, name: plan.name,
+        ...(plan.namespace ? { namespace: plan.namespace } : {}),
+        arguments: JSON.stringify({ plan: [{ step: `Verify transport ${marker}`, status: 'completed' }] }), status: 'completed' };
+    } else if (direct) {
       const command = process.platform === 'win32' ? `Write-Output ${marker}` : `printf '%s\\n' ${marker}`;
       const args = direct.name === 'exec_command' ? { cmd: command, max_output_tokens: 1000 } : direct.name === 'shell_command' ? { command } : { command: process.platform === 'win32' ? ['powershell', '-NoProfile', '-Command', command] : ['/bin/sh', '-c', command] };
       item = { type: 'function_call', id: 'fc_probe', call_id: callId, name: direct.name, arguments: JSON.stringify(args), status: 'completed' };
-    } else {
-      const exec = tools.find(t => t.name === 'exec' && ['custom', 'custom_tool'].includes(t.type));
-      assert(exec, `No supported native tool advertised: ${tools.map(t => `${t.type}:${t.name}`).join(', ')}`);
-      item = { type: 'custom_tool_call', id: 'fc_probe', call_id: callId, name: 'exec', input: `text(${JSON.stringify(marker)})`, status: 'completed' };
-    }
+    } else { throw new Error('Shell smoke needs an explicitly advertised native command tool'); }
     emit(res, item);
   } catch (e) { failure = e; res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":{"message":"local smoke fixture failed"}}'); }
 });
@@ -62,7 +68,7 @@ const worker = { ready: true, generation: 'fixture', endpoint: `http://127.0.0.1
 const gateway = createGateway({ state, workers: { snapshots: async () => new Map([[account.id, worker]]), control: async () => ({ cancelled: 0 }) } });
 await new Promise(r => gateway.server.listen(0, '127.0.0.1', r));
 try {
-  child = startCodex({ endpoint: `http://127.0.0.1:${gateway.server.address().port}`, token: state.token(), model: 'chatgpt-web/high', reasoning: 'high', env: { ...process.env, CODEX_HOME: codexHome }, args: ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', 'Use one harmless native tool, then report its exact output.'] });
+  child = startCodex({ endpoint: `http://127.0.0.1:${gateway.server.address().port}`, token: state.token(), model: 'chatgpt-web/high', reasoning: 'high', env: { ...process.env, CODEX_HOME: codexHome }, args: ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', shellMode ? 'Use one harmless native command, then report its exact output.' : 'Update the plan with one completed transport-check step, then report completion.'] });
   const timer = setTimeout(() => child.kill('SIGTERM'), 90000); timer.unref();
   const code = await new Promise((r, reject) => { child.once('error', reject); child.once('exit', r); }); clearTimeout(timer);
   if (failure) throw failure;
@@ -70,7 +76,9 @@ try {
   assert(nativeMetadata, 'Codex version did not provide the metadata required by the real web adapter');
   assert.equal(readFileSync(join(codexHome, 'config.toml'), 'utf8'), config);
   assert.equal(readFileSync(join(codexHome, 'auth.json'), 'utf8'), auth);
-  console.log('PASS: real Codex -> local fixture Responses -> native tool -> result -> final answer; config.toml and auth.json unchanged. This does NOT validate ChatGPT login/MCP/Tunnel.');
+  console.log(`PASS: real Codex -> local fixture Responses -> native ${shellMode ? 'shell' : 'update_plan'} tool -> successful receipt -> final answer; config.toml and auth.json unchanged. This does NOT validate ChatGPT login/MCP/Tunnel${shellMode ? '' : ' or shell execution'}.`);
 } finally {
-  child?.kill('SIGTERM'); await gateway.close(); fixture.closeAllConnections(); await new Promise(r => fixture.close(r)); rmSync(home, { recursive: true, force: true });
+  child?.kill('SIGTERM'); await gateway.close(); fixture.closeAllConnections(); await new Promise(r => fixture.close(r));
+  try { await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+  catch (e) { if (!['EBUSY', 'EPERM'].includes(e.code)) throw e; console.warn('Isolated smoke state retained because a native helper still owns a file handle. No user profile was touched.'); }
 }
