@@ -1,0 +1,16 @@
+node_modules/
+.runtime/
+.state/
+coverage/
+*.log
+*.key
+*.pem
+.env
+.env.*
+auth.json
+storage-state.json
+worker.json
+gateway.lock
+accounts.json
+routes.json
+.DS_Store

@@ -1,0 +1,43 @@
+name: Validate chat2codex
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  core:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm run check
+      - run: npm test
+  pinned-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - run: node scripts/bootstrap.mjs --core-only
+      - run: npm run bridge:check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chat2codex-source
+          path: |
+            src/
+            bridge/
+            public/
+            test/
+            scripts/
+            docs/
+            package.json
+            README.md
+            LICENSE
+            THIRD_PARTY_NOTICES.md
