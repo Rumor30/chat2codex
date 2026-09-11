@@ -36,3 +36,24 @@ export function runPrivate(command, args, { cwd, env, input = '', signal, timeou
     });
   });
 }
+
+/** Stop only a ChildProcess object created by this application; never search/kill other PIDs. */
+export async function terminateOwnedChild(child, { graceMs = 4000, hardMs = 2000 } = {}) {
+  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
+  await new Promise((resolve, reject) => {
+    let hardTimer;
+    const clean = () => { clearTimeout(softTimer); clearTimeout(hardTimer); child.off('exit', done); child.off('error', failed); };
+    const done = () => { clean(); resolve(); };
+    const failed = () => { clean(); reject(new Fault(503, 'process_stop_failed', 'An owned child could not be stopped')); };
+    const softTimer = setTimeout(() => {
+      child.kill('SIGKILL');
+      hardTimer = setTimeout(() => {
+        clean(); child.unref();
+        for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
+        reject(new Fault(503, 'process_stop_timeout', 'An owned child did not confirm shutdown; check it before restarting'));
+      }, hardMs);
+      hardTimer.unref();
+    }, graceMs);
+    softTimer.unref(); child.once('exit', done); child.once('error', failed); child.kill('SIGTERM');
+  });
+}

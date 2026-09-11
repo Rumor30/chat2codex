@@ -31,6 +31,6 @@ try {
   }
   assert.equal(result.descriptor.profile, 'development'); assert.equal(result.descriptor.partition, 'persist:codex-web-gpt-dev-chatgpt');
   assert.equal(result.status, 404); assert.equal(result.body.code, 'not_found', 'New authenticated setup extension was not active');
-  const denied = await fetch(`${result.descriptor.control.endpoint}/v1/chat2codex/identity`, { method: 'POST' }); assert.equal(denied.status, 401);
+  const denied = await fetch(`${result.descriptor.control.endpoint}/v1/chat2codex/identity`, { method: 'POST', signal: AbortSignal.timeout(2000) }); assert.equal(denied.status, 401);
   console.log('PASS: actual Electron launcher boot, isolated descriptor, authenticated setup extension, unauthenticated access rejected. No ChatGPT account is signed in.');
 } finally { await workers.close(); try { rmSync(home, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }); } catch { console.warn('Empty test profile retained until Electron exits.'); } }

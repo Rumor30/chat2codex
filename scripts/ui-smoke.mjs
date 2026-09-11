@@ -56,8 +56,12 @@ try {
   await form.evaluate(() => { const copy = document.querySelector('#name').cloneNode(); document.querySelector('form').prepend(copy); copy.setAttribute('aria-label', 'Name'); });
   assert.notEqual((await invoke('create')).code, 'creation_submitted');
   console.log('PASS: synthetic Connector DOM, exact tunnel identity, no premature Create, disabled security control and ambiguous inputs');
+  // Keep the exported preview readable after the XSS fixture assertion above.
+  const labelFixture = state.list().find(a => a.label.startsWith('<img'));
+  if (labelFixture) state.update(labelFixture.id, { label: '第二账号 · 界面测试' });
   mkdirSync(resolve('.runtime/ui-artifacts'), { recursive: true });
   await page.locator('#key').fill(state.token()); await page.getByRole('button', { name: '连接控制台', exact: true }).click(); await page.locator('#workspace').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => document.querySelector('#message').textContent === '');
   await page.screenshot({ path: resolve('.runtime/ui-artifacts/dashboard-fixture.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Dashboard must not overflow on mobile');

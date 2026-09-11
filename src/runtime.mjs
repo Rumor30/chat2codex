@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { runPrivate, processFailure } from './process.mjs';
+import { runPrivate, processFailure, terminateOwnedChild } from './process.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,10 +97,7 @@ export class Workers {
   async stop(id) {
     const child = this.children.get(id);
     ensure(child, 409, 'worker_not_owned', 'Restart only workers started by this gateway');
-    await new Promise(resolve => {
-      const timer = setTimeout(() => child.kill('SIGKILL'), 4000); timer.unref();
-      child.once('close', () => { clearTimeout(timer); resolve(); }); child.kill('SIGTERM');
-    }); this.children.delete(id); this.cache.delete(id);
+    await terminateOwnedChild(child); this.children.delete(id); this.cache.delete(id);
   }
   async configure(id, { tunnelId, runtimeKey, consent }, signal) {
     ensure(consent === true, 400, 'setup_consent_required', 'Confirm use of this account and Tunnel');
@@ -136,14 +133,13 @@ export class Workers {
     return this.launcherControl(id, 'assist', { tunnelId: config.tunnel.tunnelId, consent: true }, signal);
   }
   async close() {
-    await Promise.all([...this.launchers.keys()].map(id => this.launcherControl(id, 'quit').catch(() => {})));
-
-    for (const child of this.children.values()) child.kill('SIGTERM');
-    await Promise.all([...this.children.values()].map(child => new Promise(resolve => {
-      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 5000); timer.unref();
-      child.once('exit', () => { clearTimeout(timer); resolve(); });
-    })));
-    this.children.clear();
+    const launchers = [...this.launchers.entries()];
+    await Promise.all(launchers.map(([id]) => this.launcherControl(id, 'quit', {}, AbortSignal.timeout(5000)).catch(() => {})));
+    const owned = [...new Set([...launchers.map(([, child]) => child), ...this.children.values()])];
+    const outcomes = await Promise.allSettled(owned.map(child => terminateOwnedChild(child)));
+    this.children.clear(); this.launchers.clear();
+    const failed = outcomes.find(outcome => outcome.status === 'rejected');
+    if (failed) throw failed.reason;
   }
 }
 /** The pinned Electron launcher owns login and tunnel lifecycle in an isolated DEV profile. */
