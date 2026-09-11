@@ -36,7 +36,7 @@ Codex 本地工具  ←  Responses function/custom tool call
 
 ## 运行条件
 
-网关使用 Node.js 22+，无 npm 运行时依赖。本地浏览器桥还需要 Git、**Bun 1.4.0**、桌面会话和可访问 GitHub / ChatGPT 的网络。上游依赖及 Electron 由 bootstrap 按锁文件安装。不要在无桌面服务器上把 browser worker 标为可用。
+网关使用 Node.js 22+，无 npm 运行时依赖。Codex CLI 集成的测试目标固定为 **0.154.0**；0.125.0 缺少当前网页桥必需的元数据，不列为兼容版本。本地浏览器桥还需要 Git、**Bun 1.4.0**、桌面会话和可访问 GitHub / ChatGPT 的网络。上游依赖及 Electron 由 bootstrap 按锁文件安装。不要在无桌面服务器上把 browser worker 标为可用。
 
 代码固定复用 `miuuyy/codex-chatgpt-web` 的 commit：
 
@@ -99,7 +99,7 @@ node src/cli.mjs codex --model chatgpt-web/high -- exec "检查项目，不修�
 
 wrapper 使用 `-c model_providers.chat2codex.*` 和子进程环境变量传递网关凭据。密钥不在 argv。不会运行 Codex 的持久配置安装/迁移程序，不修改现有 `~/.codex/config.toml`、`auth.json` 或 Codex 安装文件。**Codex 自己运行时仍可能正常写入会话历史和日志**，这里不承诺所有 Codex 目录零写入。
 
-当前 wrapper 采用进程级 V1 多 agent 兼容配置，仍须用目标 Codex 版本实测。桌面 Codex App 的启动注入和模型选择器集成没有完成；当前入口是 CLI，不声称所有 Responses 客户端均可即插即用。
+当前 wrapper 采用进程级 V1 多 agent 兼容配置；Codex 0.154.0 的本地 fixture 工具闭环已在 Windows/Linux CI 通过，但多 agent 的真实网页任务仍待实测。桌面 Codex App 的启动注入和模型选择器集成没有完成；当前入口是 CLI，不声称所有 Responses 客户端均可即插即用。
 
 ## API 和生命周期
 
@@ -130,7 +130,14 @@ node src/cli.mjs doctor
 npm run check
 npm test
 npm run bridge:check   # 先完成 bootstrap；检查锁定上游的类型和导出
+
+# 真实 Codex 协议测试：使用明确的本地模型 fixture，无 ChatGPT 登录
+npm install --prefix .runtime/codex-smoke --no-save @openai/codex@0.154.0
+node scripts/codex-smoke.mjs          # 原生 update_plan 闭环
+node scripts/codex-smoke.mjs --shell  # 独立 shell 检查，需要系统允许正常创建沙箱
 ```
+
+代码提交 `4cc81e4` 的六项 CI 作业全部通过，包括三平台核心测试、锁定上游构建和两平台真实 Codex 计划工具闭环。默认 CLI smoke 通过不代表 shell 或 ChatGPT 网页端到端通过。CI 环境中的 shell 检查被沙箱/策略阻止，详见验证记录。
 
 详见 [验证记录](docs/VALIDATION.md)、[安全边界](docs/SECURITY.md) 和 [Session provisioning 未完成项](docs/SESSION_PROVISIONING.md)。
 
