@@ -24,7 +24,7 @@ export function profileEnvironment(state, id, env = process.env) {
 export function checkedRuntime() {
   const root = runtimePath();
   const manifest = readJson(join(root, '.chat2codex-build.json'), {});
-  ensure(manifest.commit === UPSTREAM && manifest.bridgeVersion === 3, 503, 'runtime_missing', 'Run npm run bootstrap to install the pinned browser bridge');
+  ensure(manifest.commit === UPSTREAM && manifest.bridgeVersion === 4, 503, 'runtime_missing', 'Run npm run bootstrap to install the pinned browser bridge');
   return root;
 }
 export class Workers {
