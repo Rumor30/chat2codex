@@ -8,7 +8,6 @@ import { Workers, launchAccount } from '../src/runtime.mjs';
 const home = mkdtempSync(join(tmpdir(), 'c2c-electron-')); const state = new State(home); const account = state.add('Empty Electron startup fixture');
 const workers = new Workers(state); let result;
 try {
-  // Capture diagnostics only for this deliberately empty CI account, never production profiles.
   const child = launchAccount(state, account.id, { stdio: ['ignore', 'pipe', 'pipe'] });
   workers.launchers.set(account.id, child);
   let tail = ''; let exited;
@@ -25,12 +24,15 @@ try {
     await new Promise(r => setTimeout(r, 500));
   }
   if (!result) {
-    // These diagnostics belong to a fresh account with no authenticated ChatGPT session.
     console.error(tail.replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]').replace(/sk-[A-Za-z0-9_-]+/g, '[redacted]').replace(/[A-Za-z0-9_-]{43,}/g, '[opaque]'));
     assert.fail(`Electron did not publish an accessible descriptor: ${JSON.stringify(exited || { running: true })}`);
   }
   assert.equal(result.descriptor.profile, 'development'); assert.equal(result.descriptor.partition, 'persist:codex-web-gpt-dev-chatgpt');
-  assert.equal(result.status, 404); assert.equal(result.body.code, 'not_found', 'New authenticated setup extension was not active');
+  assert.equal(result.status, 404); assert.equal(result.body.code, 'not_found', 'Authenticated Chat2Codex control extension was not active');
   const denied = await fetch(`${result.descriptor.control.endpoint}/v1/chat2codex/identity`, { method: 'POST', signal: AbortSignal.timeout(2000) }); assert.equal(denied.status, 401);
-  console.log('PASS: actual Electron launcher boot, isolated descriptor, authenticated setup extension, unauthenticated access rejected. No ChatGPT account is signed in.');
+  const deniedImport = await fetch(`${result.descriptor.control.endpoint}/v1/chat2codex/import-session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionToken: 'fixture' }), signal: AbortSignal.timeout(2000) });
+  assert.equal(deniedImport.status, 401, 'Session import must require the launcher control credential');
+  const invalidImport = await fetch(`${result.descriptor.control.endpoint}/v1/chat2codex/import-session`, { method: 'POST', headers: { authorization: `Bearer ${result.descriptor.control.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ sessionToken: 'fixture' }), signal: AbortSignal.timeout(2000) });
+  assert.equal(invalidImport.status, 400); assert.equal((await invalidImport.json()).code, 'invalid_session_secret', 'Invalid session material must fail before any authentication request');
+  console.log('PASS: actual Electron launcher boot, isolated descriptor, session-import endpoint authentication and input guard. No ChatGPT account is signed in and no credential is imported.');
 } finally { await workers.close(); try { rmSync(home, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }); } catch { console.warn('Empty test profile retained until Electron exits.'); } }
